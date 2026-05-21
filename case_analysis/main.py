@@ -19,7 +19,7 @@ from case_analysis.pages.Charttopright import render_chart
 # ---------------------------------------------------
 # 1. PAGE LAYOUT CONFIG
 # ---------------------------------------------------
-st.set_page_config(page_title="Agentic AI Leadership Dashboard", layout="wide")
+st.set_page_config(page_title="AI Prioritisation Dashboard", layout="wide")
 inject_custom_css()
 
 st.title("Prioritisation Dashboard")

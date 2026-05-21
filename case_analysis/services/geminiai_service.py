@@ -1,11 +1,11 @@
+## Xactly Confidential Author - Vikas R (X003286)
+import os
+import sys
 import google.generativeai as genai
 
-from case_analysis.config.settings import (
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config.settings import (
     GEMINI_API_KEY
-)
-
-genai.configure(
-    api_key=GEMINI_API_KEY
 )
 
 
@@ -14,24 +14,16 @@ class GeminiService:
 
     def __init__(self):
 
+        genai.configure(
+            api_key=GEMINI_API_KEY
+        )
+
         self.model = genai.GenerativeModel(
             "models/gemini-2.5-flash"
         )
 
-    def analyze_case(self, case):
 
-        prompt = f"""
-        Analyze this Salesforce support case.
 
-        Subject:
-        {case['Subject']}
+    def get_connection(self):
 
-        Status:
-        {case['Status']}
-        """
-
-        response = self.model.generate_content(
-            prompt
-        )
-
-        return response.text
+        return self.model

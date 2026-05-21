@@ -90,14 +90,44 @@ def calculate_score(
 
 @st.cache_data(ttl=180)
 def fetch_cases():
+    service=CaseService() 
+    sf=service.get_connection()
+      
+    query = """
+        SELECT
+            Id,
+            CaseNumber,
+            Subject,
+            Status,
+            Owner.Name,
+            Account.Name,
+            Support_Level__c,
+            Severity__c,
+            Sevone__c,
+            IsEscalated,
+            (select CreatedBy.Name,
+            CreatedDate,
+            IsPublished from CaseComments where IsPublished=true order by CreatedDate Desc)
+            FROM Case
+            WHERE Status IN ('New', 'Open', 'Assigned') and  Owner.Name IN (
+            'Abhishek Bose', 'Amit Bhojak', 'Amit Kumar', 'Amith Gujjar', 'Aniket Chinde',
+            'Anthony Pham', 'Aqsa Pandith', 'Becca Lozano', 'Chethan Kumar P.', 'Ganesh Babu',
+            'Gnanasiri Pechetti', 'Imari Killikelly', 'Infant Raj.', 'Ishaq Mathina', 'Joshua Halle',
+            'Kalyan Kumar', 'Karalie Murray', 'Karthik Dosapati', 'Kaushik Patowary', 'Mahesh P M',
+            'Merlyn Pushparaj', 'Mohamed Ramzin', 'Mohammad Raza', 'Mohammed Usman', 'Monika Sihag',
+            'Mugilan Gowthaman', 'Naveen Kumar Surisetti', 'Nilanjan Roy', 'Nupur Rao', 'Palak Kharche',
+            'Pallavi M R', 'Payal Gupta', 'Peter Kyller', 'Pooja Singh', 'Poonam Pandey',
+            'Prabu Rajendran', 'Prabu', 'Rohit Nargundkar', 'Sakthi Devi SK', 'Sanjay Kademani',
+            'Santosh Veduruvada', 'Santi Sahoo', 'Selvin Raja', 'Shahrukh Shahzad', 'Shakti Prasad Pati',
+            'Shreyas G Nambiar', 'Shivendra Yadav', 'Sindhu M Y', 'Sivagnana Bharathi Nagaraj', 'Sivaji Koya',
+            'Srinivas Aaguri', 'Sumit Paul', 'Sumit', 'Sushmitha Rayalkeri', 'Syeda Sajida',
+            'Tarun Buthala', 'Ullas Shenoy', 'Vikas R', 'Vilas Potadar', 'Vipul SG',
+            'Vishal Mavi', 'Yogesh R', 'Zareena Bano', 'Zareena')"""
+    result=sf.query_all(query)
+    return result["records"]
 
-    connector=SalesforceConnector()
 
-    sf=connector.connect()
 
-    service=CaseService(sf)
-
-    return service.get_recent_cases()
 
 
 def convert_to_ist(date_string):
@@ -244,7 +274,7 @@ def get_processed_data():
                 ).get(
                     "Name",""
                 )
-                if comment_user not in OWNER_REGION_MAP:
+                if comment_user == 'Customer Support User':
                     last_customer_comment_time=convert_to_ist(
                         comment.get(
                             "CreatedDate"
@@ -422,13 +452,74 @@ def render_table(filtered_df, cases, openai_service):
 
             if sentiment == "Not Analyzed":
                 if cols[8].button(":brain: Analyze", key=f"analyze_{row['Case Number']}"):
-                    with st.spinner(f"Analyzing {row['Case Number']}..."):
+
+                    with st.spinner(
+                         f"Analyzing {row['Case Number']}..."
+                ):
+
                         matching_case = next(
-                            c for c in cases
-                            if c["CaseNumber"] == row["Case Number"]
+                             c for c in cases
+                             if c["CaseNumber"] == row["Case Number"]
+                         )
+
+                        client = (
+                             openai_service.get_connection()
+                         )
+
+                        prompt = f"""
+                            Analyze this Salesforce support case.
+
+                            Case Number:
+                            {matching_case.get("CaseNumber")}
+
+                            Subject:
+                            {matching_case.get("Subject")}
+
+                            Status:
+                            {matching_case.get("Status")}
+
+                            Customer:
+                            {(matching_case.get("Account") or {}).get("Name","")}
+
+                            Escalated:
+                            {matching_case.get("IsEscalated")}
+
+                            Return ONLY one word:
+
+                            Positive
+                            Neutral
+                            Negative
+                            Critical
+                            """
+
+                        response = (
+                            client.chat.completions.create(
+
+                                model="gpt-4o-mini",
+
+                                messages=[
+                                    {
+                                        "role":"user",
+                                        "content":prompt
+                                    }
+                                ],
+
+                                temperature=0
+                            )
                         )
-                        response = openai_service.analyze_case(matching_case)
-                        st.session_state.sentiments[row["Case Number"]] = response
+
+                        sentiment = (
+                            response
+                            .choices[0]
+                            .message
+                            .content
+                            .strip()
+                        )
+
+                        st.session_state.sentiments[
+                            row["Case Number"]
+                        ] = sentiment
+
                         st.rerun()
             else:
                 # Dynamic sentiment colors
