@@ -1,4 +1,4 @@
-## Xactly Confidential Author - Vikas R (X003286)
+
 import os
 import sys
 import google.generativeai as genai

@@ -1,4 +1,4 @@
-## Xactly Confidential Author - Vikas R (X003286)
+
 
 
 from simple_salesforce import Salesforce

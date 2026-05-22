@@ -1,4 +1,4 @@
-## Xactly Confidential Author - Vikas R (X003286)
+
 
 import gspread
 from google.oauth2.service_account import Credentials
