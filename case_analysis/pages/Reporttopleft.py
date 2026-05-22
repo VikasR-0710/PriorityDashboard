@@ -18,7 +18,7 @@ OWNER_REGION_MAP = {
     "Sakthi Devi SK":"APAC", "Mohamed Ramzin":"APAC", "Syeda Sajida":"APAC", "Yogesh R":"APAC", "Ganesh Babu":"APAC", "Naveen Kumar Surisetti":"APAC", "Srinivas Aaguri":"APAC",
     "Abhishek Bose":"EMEA", "Sindhu M Y":"EMEA", "Payal Gupta":"EMEA", "Poonam Pandey":"EMEA", "Mugilan Gowthaman":"EMEA", "Santosh Veduruvada":"EMEA", "Sivagnana Bharathi Nagaraj":"EMEA", "Ullas Shenoy":"EMEA", "Vipul SG":"EMEA", "Vilas Potadar":"EMEA", "Chethan Kumar P.":"EMEA", "Amith Gujjar":"EMEA", "Monika Sihag":"EMEA", "Chandra Sai Surya Santosh Veduruvada":"EMEA",
     "Aqsa Pandith":"NA EAST", "Prabu R":"NA EAST", "Vikas R":"NA EAST", "Tarun Buthala":"NA EAST", "Gnanasiri Pechetti":"NA EAST", "Shivendra Yadav":"NA EAST", "Kaushik Patowary":"NA EAST", "Shahrukh Shahzad":"NA EAST", "Amit Bhojak":"NA EAST", "Mohammed Usman":"NA EAST", "Santi Sahoo":"NA EAST", "Nilanjan Roy":"NA EAST", "Nupur Rao":"NA EAST", "Rohit Nargundkar":"NA EAST", "Prabu Rajendran":"NA EAST", "Palak Kharche":"NA EAST", "Pooja Singh":"NA EAST", "Becca Lozano":"NA EAST", "Mohammad Raza":"NA EAST", "Sumit Paul":"NA EAST",
-    "Selvin Raja":"NA WEST", "Shakti Prasad Pati":"NA WEST", "Sanjay Kademani":"NA WEST", "Shreyas G Nambiar":"NA WEST", "Vishal Mavi":"NA WEST", "Infant Raj.":"NA WEST", "Pallavi M R":"NA WEST", "Aniket Chinde":"NA WEST", "Kalyan Kumar":"NA WEST", "Amit Kumar":"NA WEST", "Karthik Dosapati":"NA WEST", "Peter Kyller":"NA WEST", "Imari Killikelly":"NA WEST", "Anthony Pham":"NA WEST", "Sushmitha Rayalkeri":"NA WEST", "Merlyn Pushparaj":"NA WEST", "ZAREENA BANO":"NA WEST", "Joshua Halle" : "NA WEST", "Karalie Murray" : "NA WEST"
+    "Selvin Raja":"NA WEST", "Shakti Prasad Pati":"NA WEST", "Sanjay Kademani":"NA WEST", "Shreyas G Nambiar":"NA WEST", "Vishal Mavi":"NA WEST", "Infant Raj.":"NA WEST", "Pallavi M R":"NA WEST", "Aniket Chinde":"NA WEST", "Kalyan Kumar":"NA WEST", "Amit Kumar":"NA WEST", "Karthik Dosapati":"NA WEST", "Peter Kyller":"NA WEST", "Imari Killikelly":"NA WEST", "Anthony Pham":"NA WEST", "Sushmitha Rayalkeri":"NA WEST", "Merlyn Pushparaj":"NA WEST", "ZAREENA BANO":"NA WEST", "Karalie Murray" : "NA WEST"
 }
 
 
@@ -160,7 +160,7 @@ def fetch_cases():
             WHERE Status IN ('New', 'Open', 'Assigned') and  Owner.Name IN (
             'Abhishek Bose', 'Amit Bhojak', 'Amit Kumar', 'Amith Gujjar', 'Aniket Chinde',
             'Anthony Pham', 'Aqsa Pandith', 'Becca Lozano', 'Chethan Kumar P.', 'Ganesh Babu',
-            'Gnanasiri Pechetti', 'Imari Killikelly', 'Infant Raj.', 'Ishaq Mathina', 'Joshua Halle',
+            'Gnanasiri Pechetti', 'Imari Killikelly', 'Infant Raj.', 'Ishaq Mathina', 
             'Kalyan Kumar', 'Karalie Murray', 'Karthik Dosapati', 'Kaushik Patowary', 'Mahesh P M',
             'Merlyn Pushparaj', 'Mohamed Ramzin', 'Mohammad Raza', 'Mohammed Usman', 'Monika Sihag',
             'Mugilan Gowthaman', 'Naveen Kumar Surisetti', 'Nilanjan Roy', 'Nupur Rao', 'Palak Kharche',
@@ -501,7 +501,7 @@ def render_table(filtered_df, cases, openai_service):
     report_box = st.container(height=350)
 
     with report_box:
-        headers = st.columns([1, 1, 2.5, 2, 1.2,1, 1.2, 1, 1.5,2, 2,1])
+        headers = st.columns([1, 1, 2.5, 2, 1.2,1, 1.2, 1, 1.5,2, 2,2])
 
         headers[0].write("**Region**")
         headers[1].write("**Case**")
@@ -514,12 +514,12 @@ def render_table(filtered_df, cases, openai_service):
         headers[8].write("**Sentiment**")
         headers[9].write("**Last Comment**")
         headers[10].write("**Last Customer Comment Time**")
-        headers[11].write("**Rank**")
+        headers[11].write("**Prioritization Rank**")
 
         st.markdown("---")
         
         for index, row in filtered_df.iterrows():
-            cols = st.columns([1, 1, 2.5, 2, 1.2,1, 1.2, 1, 1.5,2,2, 1])
+            cols = st.columns([1, 1, 2.5, 2, 1.2,1, 1.2, 1, 1.5,2,2, 2])
 
             cols[0].write(row["Region"])
             cols[1].write(row["Case Number"])

@@ -1,5 +1,3 @@
-## Xactly Confidential Author - Vikas R (X003286)
-
 import sys
 import os
 sys.path.append(os.getcwd())
@@ -17,32 +15,149 @@ from case_analysis.pages.Reporttopleft import (
 from case_analysis.pages.Charttopright import render_chart
 
 # ---------------------------------------------------
-# 1. PAGE LAYOUT CONFIG
+# 1. PAGE LAYOUT CONFIG & STATE
 # ---------------------------------------------------
-st.set_page_config(page_title="Prioritization Dashboard", layout="wide")
+st.set_page_config(
+    page_title="Prioritization Dashboard", 
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# Initialize a session state variable for the dynamic color
+if 'accent_color' not in st.session_state:
+    st.session_state.accent_color = "#3B82F6"  # Premium Corporate Blue
+
+# Toggle thematic styles professionally
+if st.button("🎨 Toggle Accent Theme (Blue / Slate)"):
+    if st.session_state.accent_color == "#3B82F6":
+        st.session_state.accent_color = "#64748B"  # Professional Slate Muted Grey
+    else:
+        st.session_state.accent_color = "#3B82F6"  # Premium Corporate Blue
+
+# Inject existing custom CSS from your imports
 inject_custom_css()
 
-import streamlit as st
-
+# Inject Refined, Professional UI Styles
 st.markdown(
-    "<h1 style='font-family: \"Times New Roman\", Times, serif;'>PRIORITIZATION DASHBOARD</h1>", 
+    f"""
+    <style>
+    /* Modern Slate Dark Theme Base */
+    .stApp {{
+        background-color: #0F172A; /* Deep Slate/Navy Blue Black */
+        color: #F8FAFC; /* Crisp text */
+    }}
+    
+    /* Clean, professional horizontal dividers */
+    hr {{
+        border: 0;
+        height: 1px;
+        background: linear-gradient(to right, {st.session_state.accent_color}, transparent);
+        margin: 1.5rem 0;
+    }}
+    
+    /* Target ONLY top-level dashboard columns inside our main block */
+    .main-dashboard-row [data-testid="stColumn"] {{
+        background-color: #1E293B !important; 
+        padding: 1.5rem !important;
+        border-radius: 12px !important;
+        border: 1px solid #334155 !important;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }}
+
+    /* Reset styles for columns inside your tables/widgets so they don't break */
+    .main-dashboard-row [data-testid="stColumn"] [data-testid="stColumn"] {{
+        background-color: transparent !important;
+        padding: 0px !important;
+        margin: 0px !important;
+        border: none !important;
+        box-shadow: none !important;
+    }}
+
+    /* --- LARGE UPPERCASE TABLE HEADERS --- */
+    .main-dashboard-row [data-testid="stColumn"] [data-testid="stColumn"]:first-child p,
+    .main-dashboard-row [data-testid="stColumn"] [data-testid="stColumn"] h1:first-child,
+    .main-dashboard-row [data-testid="stColumn"] [data-testid="stColumn"] h2:first-child,
+    .main-dashboard-row [data-testid="stColumn"] [data-testid="stColumn"] h3:first-child {{
+        color: {st.session_state.accent_color} !important;
+        font-weight: 700 !important;
+        letter-spacing: 1px !important;
+        text-transform: uppercase !important; /* Forces CAPS */
+        font-size: 2.1rem !important; /* Increased font scale significantly */
+        line-height: 1.2 !important;
+    }}
+
+    /* Widget Labels styling */
+    label, label p, label span {{
+        color: #94A3B8 !important; 
+        font-weight: 500 !important;
+        font-size: 0.9rem !important;
+        letter-spacing: 0.5px;
+    }}
+
+    /* Premium Button overrides */
+    div[data-testid="stButton"] button {{
+        background-color: #1E293B !important;
+        border: 1px solid #334155 !important;
+        border-radius: 6px !important;
+        transition: all 0.2s ease-in-out;
+    }}
+    
+    div[data-testid="stButton"] button p {{
+        color: #E2E8F0 !important;
+        font-weight: 500 !important;
+    }}
+    
+    div[data-testid="stButton"] button:hover {{
+        border-color: {st.session_state.accent_color} !important;
+        box-shadow: 0 0 10px {st.session_state.accent_color}40;
+    }}
+
+    /* Clean, Modern Corporate Title */
+    .dashboard-title {{
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+        color: #FFFFFF !important;
+        font-size: 2rem !important; 
+        font-weight: 700 !important;
+        letter-spacing: -0.5px !important;
+        margin-bottom: 4px !important;
+    }}
+    .dashboard-subtitle {{
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+        color: #94A3B8 !important;
+        font-size: 0.95rem !important;
+        margin-bottom: 20px !important;
+    }}
+    .accent-bar {{
+        height: 4px;
+        width: 60px;
+        background-color: {st.session_state.accent_color};
+        border-radius: 2px;
+        margin-bottom: 25px;
+    }}
+    </style>
+    """,
     unsafe_allow_html=True
 )
-##st.title("PRIORITIZATION DASHBOARD")
-st.markdown("---")
 
 # ---------------------------------------------------
-# 2. RUN EXTRACTIONS, FILTERS & SELECTION LOGIC
+# 2. EXECUTIVE HEADER SECTION
+# ---------------------------------------------------
+st.markdown('<div class="dashboard-title">GCS Prioritization and Utilization Dashboard</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="accent-bar"></div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------
+# 3. RUN EXTRACTIONS, FILTERS & SELECTION LOGIC
 # ---------------------------------------------------
 df, cases = get_processed_data()
 filtered_df = apply_filters_and_ranking(df)
 
-st.markdown("---")
+# ---------------------------------------------------
+# 4. CONCURRENT UI ELEMENTS (LAYOUT)
+# ---------------------------------------------------
+st.markdown('<div class="main-dashboard-row">', unsafe_allow_html=True)
 
-# ---------------------------------------------------
-# 3. CONCURRENT UI ELEMENTS
-# ---------------------------------------------------
-left, right = st.columns([1.3, 0.7])
+left, right = st.columns([1.3, 0.7], gap="large")
 
 with left:
     render_table(filtered_df, cases, OpenAIService())
@@ -50,5 +165,10 @@ with left:
 with right:
     render_chart(filtered_df)
 
+st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------
+# 5. FOOTER
+# ---------------------------------------------------
 st.markdown("---")
-st.caption(":arrows_counterclockwise: Dashboard refreshes every 3 minutes from Salesforce")
+st.caption("🔄 **Data Sync Status:** Dashboard auto-refreshes every 3 minutes directly from Salesforce CRM.")
