@@ -7,7 +7,8 @@ from services.case_service import SalesforceConnector
 from datetime import datetime
 import pytz
 
-
+service=CaseService()
+sf=service.get_connection()
 
 # ---------------------------------------------------
 # CONFIGURATION & CSS
@@ -42,9 +43,10 @@ def inject_custom_css():
     """,unsafe_allow_html=True)
 
 
-
-
-
+@st.cache_resource
+def get_sf_connection():
+    service=CaseService()
+    return service.get_connection()
 # ---------------------------------------------------
 # BUSINESS LOGIC
 # ---------------------------------------------------
@@ -89,9 +91,54 @@ def calculate_score(
 
 
 @st.cache_data(ttl=180)
+def get_project_support(project_id):
+    sf=get_sf_connection()
+    account_query = f"""
+    SELECT Name
+    FROM Account
+    WHERE Id='{project_id}'
+    LIMIT 1
+    """
+
+    account_result = sf.query(
+        account_query
+    )
+
+    if not account_result["records"]:
+        return None
+
+    project_name = (
+        account_result["records"][0]
+        .get("Name")
+    )
+
+    support_query = f"""
+    SELECT Support_Level__c
+    FROM Case
+    WHERE Account.Name LIKE '%{project_name}%'
+    AND Support_Level__c != NULL
+    LIMIT 1
+    """
+
+    support_result = sf.query(
+        support_query
+    )
+
+    if support_result["records"]:
+
+        return (
+            support_result["records"][0]
+            .get(
+                "Support_Level__c"
+            )
+        )
+
+    return None
+
 def fetch_cases():
-    service=CaseService() 
-    sf=service.get_connection()
+    sf=get_sf_connection()
+
+    
       
     query = """
         SELECT
@@ -101,6 +148,7 @@ def fetch_cases():
             Status,
             Owner.Name,
             Account.Name,
+            AccountName__c,
             Support_Level__c,
             Severity__c,
             Sevone__c,
@@ -117,7 +165,7 @@ def fetch_cases():
             'Merlyn Pushparaj', 'Mohamed Ramzin', 'Mohammad Raza', 'Mohammed Usman', 'Monika Sihag',
             'Mugilan Gowthaman', 'Naveen Kumar Surisetti', 'Nilanjan Roy', 'Nupur Rao', 'Palak Kharche',
             'Pallavi M R', 'Payal Gupta', 'Peter Kyller', 'Pooja Singh', 'Poonam Pandey',
-            'Prabu Rajendran', 'Prabu', 'Rohit Nargundkar', 'Sakthi Devi SK', 'Sanjay Kademani',
+            'Prabu Rajendran', 'Prabu R', 'Rohit Nargundkar', 'Sakthi Devi SK', 'Sanjay Kademani',
             'Santosh Veduruvada', 'Santi Sahoo', 'Selvin Raja', 'Shahrukh Shahzad', 'Shakti Prasad Pati',
             'Shreyas G Nambiar', 'Shivendra Yadav', 'Sindhu M Y', 'Sivagnana Bharathi Nagaraj', 'Sivaji Koya',
             'Srinivas Aaguri', 'Sumit Paul', 'Sumit', 'Sushmitha Rayalkeri', 'Syeda Sajida',
@@ -188,18 +236,52 @@ def get_processed_data():
             "UNKNOWN"
         )
 
-        customer_name=(
+        customer_name = (
             case.get("Account") or {}
         ).get(
             "Name",
             "N/A"
         )
 
-        support_level=(
+        support_level = (
             case.get(
                 "Support_Level__c"
             ) or "N/A"
         )
+
+        # ---------------------------
+        # Xactly account override logic
+        # ---------------------------
+
+        project_id = case.get(
+            "AccountName__c"
+        )
+
+        if (
+            customer_name != "N/A"
+            and "Xactly" in customer_name
+            and project_id
+        ):
+
+            try:
+
+                cached_support = (
+                    get_project_support(
+                        project_id
+                    )
+                )
+
+                if cached_support:
+
+                    support_level = (
+                        cached_support
+                    )
+
+            except Exception as e:
+
+                print(
+                    f"Xactly override failed: {e}"
+                )
 
         severity=(
             case.get(

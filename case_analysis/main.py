@@ -19,10 +19,16 @@ from case_analysis.pages.Charttopright import render_chart
 # ---------------------------------------------------
 # 1. PAGE LAYOUT CONFIG
 # ---------------------------------------------------
-st.set_page_config(page_title="AI Prioritisation Dashboard", layout="wide")
+st.set_page_config(page_title="Prioritization Dashboard", layout="wide")
 inject_custom_css()
 
-st.title("Prioritisation Dashboard")
+import streamlit as st
+
+st.markdown(
+    "<h1 style='font-family: \"Times New Roman\", Times, serif;'>PRIORITIZATION DASHBOARD</h1>", 
+    unsafe_allow_html=True
+)
+##st.title("PRIORITIZATION DASHBOARD")
 st.markdown("---")
 
 # ---------------------------------------------------
