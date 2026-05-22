@@ -3,7 +3,7 @@
 import streamlit as st
 import pandas as pd
 from services.case_service import CaseService
-from clients.salesforce_connector import SalesforceConnector
+from services.case_service import SalesforceConnector
 from datetime import datetime
 import pytz
 
