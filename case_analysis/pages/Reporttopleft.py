@@ -15,10 +15,76 @@ sf=service.get_connection()
 # ---------------------------------------------------
 
 OWNER_REGION_MAP = {
-    "Sakthi Devi SK":"APAC", "Mohamed Ramzin":"APAC", "Syeda Sajida":"APAC", "Yogesh R":"APAC", "Ganesh Babu":"APAC", "Naveen Kumar Surisetti":"APAC", "Srinivas Aaguri":"APAC",
-    "Abhishek Bose":"EMEA", "Sindhu M Y":"EMEA", "Payal Gupta":"EMEA", "Poonam Pandey":"EMEA", "Mugilan Gowthaman":"EMEA", "Santosh Veduruvada":"EMEA", "Sivagnana Bharathi Nagaraj":"EMEA", "Ullas Shenoy":"EMEA", "Vipul SG":"EMEA", "Vilas Potadar":"EMEA", "Chethan Kumar P.":"EMEA", "Amith Gujjar":"EMEA", "Monika Sihag":"EMEA", "Chandra Sai Surya Santosh Veduruvada":"EMEA",
-    "Aqsa Pandith":"NA EAST", "Prabu R":"NA EAST", "Vikas R":"NA EAST", "Tarun Buthala":"NA EAST", "Gnanasiri Pechetti":"NA EAST", "Shivendra Yadav":"NA EAST", "Kaushik Patowary":"NA EAST", "Shahrukh Shahzad":"NA EAST", "Amit Bhojak":"NA EAST", "Mohammed Usman":"NA EAST", "Santi Sahoo":"NA EAST", "Nilanjan Roy":"NA EAST", "Nupur Rao":"NA EAST", "Rohit Nargundkar":"NA EAST", "Prabu Rajendran":"NA EAST", "Palak Kharche":"NA EAST", "Pooja Singh":"NA EAST", "Becca Lozano":"NA EAST", "Mohammad Raza":"NA EAST", "Sumit Paul":"NA EAST",
-    "Selvin Raja":"NA WEST", "Shakti Prasad Pati":"NA WEST", "Sanjay Kademani":"NA WEST", "Shreyas G Nambiar":"NA WEST", "Vishal Mavi":"NA WEST", "Infant Raj.":"NA WEST", "Pallavi M R":"NA WEST", "Aniket Chinde":"NA WEST", "Kalyan Kumar":"NA WEST", "Amit Kumar":"NA WEST", "Karthik Dosapati":"NA WEST", "Peter Kyller":"NA WEST", "Imari Killikelly":"NA WEST", "Anthony Pham":"NA WEST", "Sushmitha Rayalkeri":"NA WEST", "Merlyn Pushparaj":"NA WEST", "ZAREENA BANO":"NA WEST", "Karalie Murray" : "NA WEST"
+
+    # APAC
+    "Sakthi Devi SK": "APAC",
+    "Mohamed Ramzin": "APAC",
+    "Syeda Sajida": "APAC",
+    "Yogesh R": "APAC",
+    "Ganesh Babu": "APAC",
+    "Srinivas Aaguri": "APAC",
+
+    # EMEA
+    "Abhishek Bose": "EMEA",
+    "Sindhu M Y": "EMEA",
+    "Payal Gupta": "EMEA",
+    "Poonam Pandey": "EMEA",
+    "Mugilan Gowthaman": "EMEA",
+    "Santosh Veduruvada": "EMEA",
+    "Sivagnana Bharathi Nagaraj": "EMEA",
+    "Ullas Shenoy": "EMEA",
+    "Vipul SG": "EMEA",
+    "Vilas Potadar": "EMEA",
+    "Chethan Kumar P.": "EMEA",
+    "Chandra Sai Surya Santosh Veduruvada": "EMEA",
+
+    # NA EAST
+    "Aqsa Pandith": "NA EAST",
+    "Prabu R": "NA EAST",
+    "Vikas R": "NA EAST",
+    "Tarun Buthala": "NA EAST",
+    "Gnanasiri Pechetti": "NA EAST",
+    "Shivendra Yadav": "NA EAST",
+    "Kaushik Patowary": "NA EAST",
+    "Shahrukh Shahzad": "NA EAST",
+    "Amit Bhojak": "NA EAST",
+    "Mohammed Usman": "NA EAST",
+    "Santi Sahoo": "NA EAST",
+    "Nilanjan Roy": "NA EAST",
+    "Nupur Rao": "NA EAST",
+    "Rohit Nargundkar": "NA EAST",
+    "Prabu Rajendran": "NA EAST",
+    "Palak Kharche": "NA EAST",
+    "Pooja Singh": "NA EAST",
+    "Becca Lozano": "NA EAST",
+
+
+    # NA WEST
+    "Selvin Raja": "NA WEST",
+    "Shakti Prasad Pati": "NA WEST",
+    "Sanjay Kademani": "NA WEST",
+    "Shreyas G Nambiar": "NA WEST",
+    "Vishal Mavi": "NA WEST",
+    "Infant Raj.": "NA WEST",
+    "Pallavi M R": "NA WEST",
+    "Aniket Chinde": "NA WEST",
+    "Kalyan Kumar": "NA WEST",
+    "Amit Kumar": "NA WEST",
+    "Karthik Dosapati": "NA WEST",
+    "Peter Kyller": "NA WEST",
+    "Anthony Pham": "NA WEST",
+    "ZAREENA BANO": "NA WEST",
+    "Karalie Murray": "NA WEST",
+
+    #Premium Plus
+    "Sushmitha Rayalkeri": "P+",
+    "Amith Gujjar": "P+",
+    "Monika Sihag": "P+",
+    "Mohammad Raza": "P+",
+    "Sumit Paul": "P+",
+    "Imari Killikelly": "P+",
+    "Merlyn Pushparaj": "P+",
+    "Naveen Kumar Surisetti": "P+",
 }
 
 
@@ -411,80 +477,42 @@ def get_processed_data():
 
 
 def apply_filters_and_ranking(df):
-
     c1, c2 = st.columns(2)
 
-    # -------- Region filter --------
     with c1:
-
-        regions = sorted(
-            df["Region"].dropna().unique()
-        )
-
+        regions = sorted(df["Region"].dropna().unique())
         selected_regions = st.multiselect(
-            ":earth_africa: Region",
-            regions,
-            default=regions
+            ":earth_africa: Region", regions, default=[]
         )
 
-    if not selected_regions:
-        selected_regions = regions
+    if selected_regions:
+        temp_df = df[df["Region"].isin(selected_regions)]
+        available_owners = sorted(temp_df["Case Owner"].dropna().unique())
+    else:
+        temp_df = df.iloc[:0]  # 👈 Empty DF but KEEPS all columns
+        available_owners = []
 
-
-
-    # Filter temporary dataframe by region first
-    temp_df = df[
-        df["Region"].isin(selected_regions)
-    ]
-
-
-
-    # -------- Owner filter depends on region --------
     with c2:
-
-        owners = sorted(
-            temp_df["Case Owner"]
-            .dropna()
-            .unique()
-        )
-
         selected_owners = st.multiselect(
-            ":bust_in_silhouette: Owner",
-            owners,
-            default=owners
+            ":bust_in_silhouette: Owner", available_owners, default=[]
         )
 
-    if not selected_owners:
-        selected_owners = owners
+    # 👇 Return schema-safe empty DF if no region selected
+    if not selected_regions:
+        return temp_df
 
+    if selected_owners:
+        filtered_df = temp_df[temp_df["Case Owner"].isin(selected_owners)]
+    else:
+        filtered_df = temp_df
 
-
-    # Final filter
-    filtered_df = temp_df[
-        temp_df["Case Owner"]
-        .isin(selected_owners)
-    ]
-
-
-
-    # Ranking logic unchanged
-    filtered_df = filtered_df.sort_values(
-        by=[
-            "Case Owner",
-            "Case Score"
-        ],
-        ascending=[True,False]
-    )
-
-    filtered_df["Sequential_Rank"] = (
-        filtered_df.groupby(
-            "Case Owner"
-        ).cumcount()+1
-    )
+    if not filtered_df.empty:
+        filtered_df = filtered_df.sort_values(
+            by=["Case Owner", "Case Score"], ascending=[True, False]
+        )
+        filtered_df["Sequential_Rank"] = filtered_df.groupby("Case Owner").cumcount() + 1
 
     return filtered_df
-
-
 
 
 
@@ -497,12 +525,16 @@ def apply_filters_and_ranking(df):
 
 def render_table(filtered_df, cases, openai_service):
     st.subheader(":clipboard: AI Case Monitoring")
+    
+    # 👈 Show a clean message when no filters are selected
+    if filtered_df.empty:
+        st.info("👈 Please select at least one **Region** and one **Owner** to view cases.")
+        return
 
     report_box = st.container(height=350)
 
     with report_box:
-        headers = st.columns([1, 1, 2.5, 2, 1.2,1, 1.2, 1, 1.5,2, 2,2])
-
+        headers = st.columns([1, 1.5, 2.3, 2, 2, 1, 1.2, 1.5, 1.8, 2.5, 2, 2])
         headers[0].write("**Region**")
         headers[1].write("**Case**")
         headers[2].write("**Customer**")
@@ -519,8 +551,7 @@ def render_table(filtered_df, cases, openai_service):
         st.markdown("---")
         
         for index, row in filtered_df.iterrows():
-            cols = st.columns([1, 1, 2.5, 2, 1.2,1, 1.2, 1, 1.5,2,2, 2])
-
+            cols = st.columns([1, 1.5, 2.3, 2, 2, 1, 1.2, 1.5, 1.8, 2.5, 2, 2])
             cols[0].write(row["Region"])
             cols[1].write(row["Case Number"])
             cols[2].write(row["Customer Name"])
@@ -531,80 +562,29 @@ def render_table(filtered_df, cases, openai_service):
             cols[7].write("Yes" if row["Escalated"] else "No")
 
             sentiment = row["Sentiment"]
-
             if sentiment == "Not Analyzed":
                 if cols[8].button(":brain: Analyze", key=f"analyze_{row['Case Number']}"):
-
-                    with st.spinner(
-                         f"Analyzing {row['Case Number']}..."
-                ):
-
-                        matching_case = next(
-                             c for c in cases
-                             if c["CaseNumber"] == row["Case Number"]
-                         )
-
-                        client = (
-                             openai_service.get_connection()
-                         )
-
+                    with st.spinner(f"Analyzing {row['Case Number']}..."):
+                        matching_case = next(c for c in cases if c["CaseNumber"] == row["Case Number"])
+                        client = openai_service.get_connection()
                         prompt = f"""
                             Analyze this Salesforce support case.
-
-                            Case Number:
-                            {matching_case.get("CaseNumber")}
-
-                            Subject:
-                            {matching_case.get("Subject")}
-
-                            Status:
-                            {matching_case.get("Status")}
-
-                            Customer:
-                            {(matching_case.get("Account") or {}).get("Name","")}
-
-                            Escalated:
-                            {matching_case.get("IsEscalated")}
-
-                            Return ONLY one word:
-
-                            Positive
-                            Neutral
-                            Negative
-                            Critical
-                            """
-
-                        response = (
-                            client.chat.completions.create(
-
-                                model="gpt-4o-mini",
-
-                                messages=[
-                                    {
-                                        "role":"user",
-                                        "content":prompt
-                                    }
-                                ],
-
-                                temperature=0
-                            )
+                            Case Number: {matching_case.get("CaseNumber")}
+                            Subject: {matching_case.get("Subject")}
+                            Status: {matching_case.get("Status")}
+                            Customer: {(matching_case.get("Account") or {}).get("Name","")}
+                            Escalated: {matching_case.get("IsEscalated")}
+                            Return ONLY one word: Positive, Neutral, Negative, or Critical.
+                        """
+                        response = client.chat.completions.create(
+                            model="gpt-4o-mini",
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0
                         )
-
-                        sentiment = (
-                            response
-                            .choices[0]
-                            .message
-                            .content
-                            .strip()
-                        )
-
-                        st.session_state.sentiments[
-                            row["Case Number"]
-                        ] = sentiment
-
+                        sentiment = response.choices[0].message.content.strip()
+                        st.session_state.sentiments[row["Case Number"]] = sentiment
                         st.rerun()
             else:
-                # Dynamic sentiment colors
                 sentiment_lower = sentiment.lower()
                 if "positive" in sentiment_lower:
                     cols[8].success(sentiment) 
@@ -615,7 +595,7 @@ def render_table(filtered_df, cases, openai_service):
                 else:
                     cols[8].info(sentiment)    
 
-            # Sequential Rank
             cols[9].write(row["Last Comment By"])
             cols[10].write(row["Last Customer Comment"])
-            cols[11].write(f"{row['Sequential_Rank']} ({row['Case Score']}pts)")
+            cols[11].write(row["Sequential_Rank"])
+          ##  cols[11].write(f"{row['Sequential_Rank']} ({row['Case Score']}pts)")

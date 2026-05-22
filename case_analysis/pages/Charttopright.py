@@ -2,7 +2,7 @@ import streamlit as st
 import plotly.graph_objects as go
 
 def render_chart(filtered_df):
-
+    
     # Use markdown for the header to maintain theme consistency instead of default subheader
     st.markdown("<h3 style='color: #F8FAFC; margin-top: 0; margin-bottom: 10px;'>📊 Utilization Meter</h3>", unsafe_allow_html=True)
 

@@ -135,6 +135,8 @@ st.markdown(
         border-radius: 2px;
         margin-bottom: 25px;
     }}
+
+ 
     </style>
     """,
     unsafe_allow_html=True
