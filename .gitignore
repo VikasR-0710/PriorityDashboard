@@ -4,3 +4,4 @@ __pycache__/
 .DS_Store
 idea/
 .vscode/
+case_analysis/config/credentials.json
