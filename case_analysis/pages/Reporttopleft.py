@@ -1,10 +1,8 @@
-
-
 import streamlit as st
 import pandas as pd
 from services.case_service import CaseService
 from services.case_service import SalesforceConnector
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
 service=CaseService()
@@ -25,7 +23,6 @@ OWNER_REGION_MAP = {
     "Srinivas Aaguri": "APAC",
 
     # EMEA
-    "Abhishek Bose": "EMEA",
     "Sindhu M Y": "EMEA",
     "Payal Gupta": "EMEA",
     "Poonam Pandey": "EMEA",
@@ -113,6 +110,7 @@ def inject_custom_css():
 def get_sf_connection():
     service=CaseService()
     return service.get_connection()
+
 # ---------------------------------------------------
 # BUSINESS LOGIC
 # ---------------------------------------------------
@@ -154,6 +152,69 @@ def calculate_score(
         0
     )
 
+def get_sla_hours(severity, support_level):
+    """
+    Returns the SLA response time in HOURS (float) based on Severity and Support Level.
+    """
+    if not severity or severity == "N/A":
+        return None
+    
+    # Normalize support level for matching
+    sl_lower = support_level.lower() if support_level else ""
+    
+    # Check if Premium (covers 'Premium Plus' and 'Premium (24x7)')
+    is_premium = "premium" in sl_lower
+    
+    # Mapping based on your table
+    sla_map = {
+        "S1": {"premium": 0.5, "standard": 1.0},   # 30 mins vs 60 mins
+        "S2": {"premium": 1.0, "standard": 4.0},   # 1 hour vs 4 hours
+        "S3": {"premium": 2.0, "standard": 6.0},   # 2 hours vs 6 hours
+        "S4": {"premium": 6.0, "standard": 8.0},   # 6 hours vs 8 hours
+    }
+    
+    severity_key = severity.strip().upper()
+    
+    # Handle variations of S1/SevOne
+    if severity_key.startswith("SEV") or severity_key == "SEVONE":
+         severity_key = "S1" 
+    elif severity_key not in ["S1", "S2", "S3", "S4"]:
+        return None
+
+    tier = "premium" if is_premium else "standard"
+    
+    try:
+        return sla_map[severity_key][tier]
+    except KeyError:
+        return None
+
+def calculate_sla_deadline(last_comment_time_str, sla_hours):
+    """
+    Calculates the deadline timestamp in IST.
+    Input: last_comment_time_str (format: "dd-Mon HH:MM" from convert_to_ist)
+    Output: String deadline in IST "dd-Mon HH:MM" or "N/A"
+    """
+    if not last_comment_time_str or last_comment_time_str == "N/A" or sla_hours is None:
+        return "N/A"
+    
+    try:
+        # Parse the IST time string back to a datetime object
+        ist = pytz.timezone("Asia/Kolkata")
+        now_ist = datetime.now(ist)
+        current_year = now_ist.year
+        
+        dt_comment = datetime.strptime(f"{current_year} {last_comment_time_str}", "%Y %d-%b %H:%M")
+        dt_comment = ist.localize(dt_comment)
+        
+        # Add SLA hours
+        deadline_dt = dt_comment + timedelta(hours=sla_hours)
+        
+        # Format back to string
+        return deadline_dt.strftime("%d-%b %H:%M")
+        
+    except Exception as e:
+        # Fallback if parsing fails
+        return "N/A"
 
 
 @st.cache_data(ttl=180)
@@ -373,7 +434,10 @@ def get_processed_data():
           severity,
          support_level,
          escalated
-        )       
+        )  
+        
+        # 1. Get SLA Hours duration
+        sla_hours_duration = get_sla_hours(severity, support_level)      
 
 
 
@@ -430,7 +494,9 @@ def get_processed_data():
                         or "N/A"
                     )
                     break
-
+        
+        # 2. Calculate SLA Deadline Timestamp
+        sla_deadline_time = calculate_sla_deadline(last_customer_comment_time, sla_hours_duration)
 
 
         dashboard.append({
@@ -467,7 +533,8 @@ def get_processed_data():
                 "Not Analyzed"
             ),
             "Case Score":case_score,
-            "Last Customer Comment":last_customer_comment_time
+            "Last Customer Comment":last_customer_comment_time,
+            "SLA Response Time": sla_deadline_time
         })
 
     return pd.DataFrame(
@@ -534,7 +601,13 @@ def render_table(filtered_df, cases, openai_service):
     report_box = st.container(height=350)
 
     with report_box:
-        headers = st.columns([1, 1.5, 2.3, 2, 2, 1, 1.2, 1.5, 1.8, 2.5, 2, 2])
+
+        # UPDATED WIDTHS: 
+        # Increased Customer (3.5), Owner (3.0), Support Level (2.5)
+        # Decreased Region (0.8), Case (1.2), Status (1.0)
+        col_widths = [1, 1.2, 2.8, 3.0, 2, 1.0, 1.0, 1.2, 1.5, 2.5, 2.0, 2.2, 0.8]
+        
+        headers = st.columns(col_widths)
         headers[0].write("**Region**")
         headers[1].write("**Case**")
         headers[2].write("**Customer**")
@@ -545,13 +618,14 @@ def render_table(filtered_df, cases, openai_service):
         headers[7].write("**Escalated**")
         headers[8].write("**Sentiment**")
         headers[9].write("**Last Comment**")
-        headers[10].write("**Last Customer Comment Time**")
-        headers[11].write("**Prioritization Rank**")
+        headers[10].write("**LCC Time**")
+        headers[11].write("**SLA Deadline**") # New Column Header
+        headers[12].write("**Rank**")
 
         st.markdown("---")
         
         for index, row in filtered_df.iterrows():
-            cols = st.columns([1, 1.5, 2.3, 2, 2, 1, 1.2, 1.5, 1.8, 2.5, 2, 2])
+            cols = st.columns(col_widths)
             cols[0].write(row["Region"])
             cols[1].write(row["Case Number"])
             cols[2].write(row["Customer Name"])
@@ -597,5 +671,8 @@ def render_table(filtered_df, cases, openai_service):
 
             cols[9].write(row["Last Comment By"])
             cols[10].write(row["Last Customer Comment"])
-            cols[11].write(row["Sequential_Rank"])
-          ##  cols[11].write(f"{row['Sequential_Rank']} ({row['Case Score']}pts)")
+            
+            # New SLA Column - Shows the calculated deadline time
+            cols[11].write(row["SLA Response Time"])
+            
+            cols[12].markdown(f"<div style='color: #FFFFFF; font-weight: 600; font-size: 14px;'>{row['Sequential_Rank']}</div>", unsafe_allow_html=True)

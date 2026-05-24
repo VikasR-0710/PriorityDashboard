@@ -15,8 +15,8 @@ def render_chart(filtered_df):
     # Dynamic max scale
     max_score = max(total_score + 50, 100)
 
-    # Card wrapper matching table height
-    with st.container(border=True):
+    # Card wrapper matching table height — now set explicit height to match table container
+    with st.container(border=True, height=350):  # 👈 MATCH TABLE HEIGHT
 
         # Added explicit color #F8FAFC so text is visible on dark slate
         st.markdown(
@@ -37,10 +37,10 @@ def render_chart(filtered_df):
             value=total_score,
 
             domain={'x':[0,1],
-                    'y':[0.22,0.95]},  # move gauge upward
+                    'y':[0.15,0.9]},  # Adjusted y-range to use more vertical space
 
             number={
-                "font":{"size":55, "color": "#F8FAFC"} # Force number to be light
+                "font":{"size":50, "color": "#F8FAFC"} # Slightly larger font for better visibility
             },
 
             gauge={
@@ -48,13 +48,13 @@ def render_chart(filtered_df):
                     'range':[0,max_score],
                     'tickwidth':1,
                     'tickcolor': "#F8FAFC",
-                    'tickfont': dict(color="#F8FAFC")
+                    'tickfont': dict(color="#F8FAFC", size=12)
                 },
 
                 'bar':{
                     # Exact RGB for 'darkgreen' (0, 100, 0) with 0.85 opacity
                     'color':'rgba(0, 100, 0, 0.85)',
-                    'thickness':0.30
+                    'thickness':0.35  # Slightly thicker bar for visual balance
                 },
 
                 'steps':[
@@ -70,24 +70,23 @@ def render_chart(filtered_df):
 
                 'threshold':{
                     'line':{
-                        'color':'#FFFFFF', # Changed from black to white for dark mode visibility
-                        'width':4
+                        'color':'#FFFFFF',
+                        'width':5
                     },
-                    'thickness':0.8,
+                    'thickness':0.9,
                     'value':total_score
                 }
             }
         ))
 
         fig.update_layout(
-            height=290,   # match table
+            height=330,   # 👈 Match table container height minus padding
             margin=dict(
-                l=20,
-                r=20,
-                t=30,
-                b=10
+                l=15,
+                r=15,
+                t=40,     # More top margin for title
+                b=15
             ),
-            # CRITICAL ADDITIONS: Transparent backgrounds and crisp text
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             font=dict(color="#F8FAFC")
@@ -96,19 +95,19 @@ def render_chart(filtered_df):
         st.plotly_chart(
             fig,
             use_container_width=True,
-            theme=None # Overrides Streamlit's default background hijacking
+            theme=None
         )
 
         if selected_owners == 1:
             owner = filtered_df["Case Owner"].iloc[0]
 
-            # Added explicit color #94A3B8 (Slate subtitle color)
             st.markdown(
                 f"""
                 <div style='text-align:center;
                             font-size:15px;
                             font-weight:bold;
-                            color:#94A3B8'>
+                            color:#94A3B8;
+                            margin-top: -10px;'>
                  {owner}
                 </div>
                 """,

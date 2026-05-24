@@ -1,6 +1,4 @@
-[server]
-port = 8501
-address = "127.0.0.1"
+
 
 [theme]
 primaryColor = "#F63366"

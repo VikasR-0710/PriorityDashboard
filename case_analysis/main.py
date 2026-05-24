@@ -74,17 +74,21 @@ st.markdown(
         box-shadow: none !important;
     }}
 
-    /* --- LARGE UPPERCASE TABLE HEADERS --- */
-    .main-dashboard-row [data-testid="stColumn"] [data-testid="stColumn"]:first-child p,
-    .main-dashboard-row [data-testid="stColumn"] [data-testid="stColumn"] h1:first-child,
-    .main-dashboard-row [data-testid="stColumn"] [data-testid="stColumn"] h2:first-child,
-    .main-dashboard-row [data-testid="stColumn"] [data-testid="stColumn"] h3:first-child {{
-        color: {st.session_state.accent_color} !important;
-        font-weight: 700 !important;
-        letter-spacing: 1px !important;
-        text-transform: uppercase !important; /* Forces CAPS */
-        font-size: 2.1rem !important; /* Increased font scale significantly */
-        line-height: 1.2 !important;
+    /* --- INCREASE TABLE FONT SIZE --- */
+    /* Target the text inside the table container specifically */
+    .main-dashboard-row [data-testid="stColumn"]:first-child p,
+    .main-dashboard-row [data-testid="stColumn"]:first-child div[data-testid="stHorizontalBlock"] p {{
+        font-size: 14px !important; /* Increased from default ~12px */
+        line-height: 1.4 !important;
+    }}
+    
+    /* Make headers bold and slightly larger */
+    .main-dashboard-row [data-testid="stColumn"]:first-child h1,
+    .main-dashboard-row [data-testid="stColumn"]:first-child h2,
+    .main-dashboard-row [data-testid="stColumn"]:first-child h3,
+    .main-dashboard-row [data-testid="stColumn"]:first-child h4 {{
+        font-size: 1.2rem !important;
+        color: #FFFFFF !important;
     }}
 
     /* Widget Labels styling */
@@ -159,7 +163,8 @@ filtered_df = apply_filters_and_ranking(df)
 # ---------------------------------------------------
 st.markdown('<div class="main-dashboard-row">', unsafe_allow_html=True)
 
-left, right = st.columns([1.3, 0.7], gap="large")
+# CHANGED: Ratio [3, 1] gives 75% width to Table and 25% to Chart
+left, right = st.columns([3, 1], gap="large")
 
 with left:
     render_table(filtered_df, cases, OpenAIService())
