@@ -217,7 +217,7 @@ def calculate_sla_deadline(last_comment_time_str, sla_hours):
         return "N/A"
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=3600)
 def get_project_support(project_id):
     sf=get_sf_connection()
     account_query = f"""
@@ -285,7 +285,7 @@ def fetch_cases():
             IsPublished from CaseComments where IsPublished=true order by CreatedDate Desc)
             FROM Case
             WHERE Status IN ('New', 'Open', 'Assigned') and  Owner.Name IN (
-            'Abhishek Bose', 'Amit Bhojak', 'Amit Kumar', 'Amith Gujjar', 'Aniket Chinde',
+            'Amit Bhojak', 'Amit Kumar', 'Amith Gujjar', 'Aniket Chinde',
             'Anthony Pham', 'Aqsa Pandith', 'Becca Lozano', 'Chethan Kumar P.', 'Ganesh Babu',
             'Gnanasiri Pechetti', 'Imari Killikelly', 'Infant Raj.', 'Ishaq Mathina', 
             'Kalyan Kumar', 'Karalie Murray', 'Karthik Dosapati', 'Kaushik Patowary', 'Mahesh P M',
@@ -342,6 +342,7 @@ def get_processed_data():
     with st.spinner(
         "Fetching Salesforce Cases..."
     ):
+    
 
         cases=fetch_cases()
 
@@ -391,6 +392,7 @@ def get_processed_data():
         ):
 
             try:
+                
 
                 cached_support = (
                     get_project_support(
@@ -595,7 +597,7 @@ def render_table(filtered_df, cases, openai_service):
     
     # 👈 Show a clean message when no filters are selected
     if filtered_df.empty:
-        st.info("👈 Please select at least one **Region** and one **Owner** to view cases.")
+        st.info("👈 Please select at least one **Region** to view cases.")
         return
 
     report_box = st.container(height=350)
@@ -603,8 +605,7 @@ def render_table(filtered_df, cases, openai_service):
     with report_box:
 
         # UPDATED WIDTHS: 
-        # Increased Customer (3.5), Owner (3.0), Support Level (2.5)
-        # Decreased Region (0.8), Case (1.2), Status (1.0)
+
         col_widths = [1, 1.2, 2.8, 3.0, 2, 1.0, 1.0, 1.2, 1.5, 2.5, 2.0, 2.2, 0.8]
         
         headers = st.columns(col_widths)

@@ -15,6 +15,36 @@ from case_analysis.pages.Reporttopleft import (
 from case_analysis.pages.Charttopright import render_chart
 
 # ---------------------------------------------------
+# 0. HELPER FUNCTIONS FOR REFRESH
+# ---------------------------------------------------
+def refresh_dashboard():
+    """
+    Clears ALL caches and session state to force a complete 
+    reload of data from sources (Salesforce, APIs, etc.)
+    """
+    # 1. Clear Streamlit Data Cache (covers @st.cache_data)
+    st.cache_data.clear()
+    
+    # 2. Clear Streamlit Resource Cache (covers @st.cache_resource)
+    st.cache_resource.clear()
+    
+    # 3. Clear specific Session State keys related to UI filters/state
+    # Add any other keys your app uses to store temporary state
+    keys_to_clear = [
+        'filter_case_id', 
+        'filter_region', 
+        'filter_status',
+        'expanded_rows',
+        'selected_cases'
+    ]
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+    
+    # 4. Force a full script rerun
+    st.rerun()
+
+# ---------------------------------------------------
 # 1. PAGE LAYOUT CONFIG & STATE
 # ---------------------------------------------------
 st.set_page_config(
@@ -139,22 +169,33 @@ st.markdown(
         border-radius: 2px;
         margin-bottom: 25px;
     }}
-
- 
     </style>
     """,
     unsafe_allow_html=True
 )
 
 # ---------------------------------------------------
-# 2. EXECUTIVE HEADER SECTION
+# 2. EXECUTIVE HEADER SECTION WITH REFRESH BUTTON
 # ---------------------------------------------------
-st.markdown('<div class="dashboard-title">GCS Prioritization and Utilization Dashboard</div>', unsafe_allow_html=True)
-st.markdown(f'<div class="accent-bar"></div>', unsafe_allow_html=True)
+
+# Create a row for Title and Button
+header_col1, header_col2 = st.columns([0.8, 0.2])
+
+with header_col1:
+    st.markdown('<div class="dashboard-title">GCS Prioritization and Utilization Dashboard</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="accent-bar"></div>', unsafe_allow_html=True)
+
+with header_col2:
+    # Add the refresh button aligned to the right
+    # use_container_width=True makes it fill the column for better clickability
+    if st.button("🔄 Refresh Dashboard", use_container_width=True, type="secondary"):
+        refresh_dashboard()
 
 # ---------------------------------------------------
 # 3. RUN EXTRACTIONS, FILTERS & SELECTION LOGIC
 # ---------------------------------------------------
+# Because we cleared caches in refresh_dashboard(), this will now 
+# fetch fresh data from Salesforce/APIs every time refresh is clicked.
 df, cases = get_processed_data()
 filtered_df = apply_filters_and_ranking(df)
 
@@ -178,4 +219,4 @@ st.markdown('</div>', unsafe_allow_html=True)
 # 5. FOOTER
 # ---------------------------------------------------
 st.markdown("---")
-st.caption("🔄 **Data Sync Status:** Dashboard auto-refreshes every 3 minutes directly from Salesforce CRM.")
+st.caption("🔄 Dashboard auto-refreshes every 1 Hour directly from Salesforce.")
