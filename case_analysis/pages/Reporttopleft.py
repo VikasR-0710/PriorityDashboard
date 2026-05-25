@@ -3,11 +3,12 @@ import pandas as pd
 from services.case_service import CaseService
 from services.case_service import SalesforceConnector
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import pytz
 
 # Initialize service and connection
-service=CaseService()
-sf=service.get_connection()
+service = CaseService()
+sf = service.get_connection()
 
 # ---------------------------------------------------
 # CONFIGURATION & CSS
@@ -104,7 +105,7 @@ def inject_custom_css():
     p { font-size:12px !important; }
     button { font-size:11px !important; padding:0.1rem !important; }        
     </style>
-    """,unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
 
 @st.cache_resource
@@ -114,7 +115,7 @@ def get_sf_connection():
     @st.cache_resource ensures the connection is created once per session, 
     not on every script rerun.
     """
-    service=CaseService()
+    service = CaseService()
     return service.get_connection()
 
 # ---------------------------------------------------
@@ -136,25 +137,26 @@ def calculate_score(sevone, severity, support_level, escalated):
     if escalated:
         return 13
 
-    score_map={
-        ("S1","Premium Plus"):12,
-        ("S1","Premium (24x7)"):11,
-        ("S1","Standard"):10,
+    score_map = {
+        ("S1", "Premium Plus"): 12,
+        ("S1", "Premium (24x7)"): 11,
+        ("S1", "Standard"): 10,
 
-        ("S2","Premium Plus"):9,
-        ("S2","Premium (24x7)"):8,
-        ("S2","Standard"):7,
+        ("S2", "Premium Plus"): 9,
+        ("S2", "Premium (24x7)"): 8,
+        ("S2", "Standard"): 7,
 
-        ("S3","Premium Plus"):6,
-        ("S3","Premium (24x7)"):5,
-        ("S3","Standard"):4,
+        ("S3", "Premium Plus"): 6,
+        ("S3", "Premium (24x7)"): 5,
+        ("S3", "Standard"): 4,
 
-        ("S4","Premium Plus"):3,
-        ("S4","Premium (24x7)"):2,
-        ("S4","Standard"):1
+        ("S4", "Premium Plus"): 3,
+        ("S4", "Premium (24x7)"): 2,
+        ("S4", "Standard"): 1
     }
 
     return score_map.get((severity, support_level), 0)
+
 
 def get_sla_hours(severity, support_level):
     """
@@ -193,39 +195,6 @@ def get_sla_hours(severity, support_level):
     except KeyError:
         return None
 
-def calculate_sla_deadline(last_comment_time_str, sla_hours):
-    """
-    Calculates the deadline timestamp in IST.
-    Input: last_comment_time_str (format: "dd-Mon HH:MM" from convert_to_ist)
-    Output: String deadline in IST "dd-Mon HH:MM" or "N/A"
-    
-    Logic: Takes the time of the last customer comment, adds the SLA hours, 
-    and returns the resulting timestamp.
-    """
-    if not last_comment_time_str or last_comment_time_str == "N/A" or sla_hours is None:
-        return "N/A"
-    
-    try:
-        # Parse the IST time string back to a datetime object
-        ist = pytz.timezone("Asia/Kolkata")
-        now_ist = datetime.now(ist)
-        current_year = now_ist.year
-        
-        # Note: This assumes the comment was made in the current year. 
-        # For robustness, year should ideally be part of the input string.
-        dt_comment = datetime.strptime(f"{current_year} {last_comment_time_str}", "%Y %d-%b %H:%M")
-        dt_comment = ist.localize(dt_comment)
-        
-        # Add SLA hours
-        deadline_dt = dt_comment + timedelta(hours=sla_hours)
-        
-        # Format back to string
-        return deadline_dt.strftime("%d-%b %H:%M")
-        
-    except Exception as e:
-        # Fallback if parsing fails
-        return "N/A"
-
 
 @st.cache_data(ttl=3600)
 def get_project_support(project_id):
@@ -234,7 +203,7 @@ def get_project_support(project_id):
     Cached for 1 hour to reduce API calls.
     Used specifically for overriding support levels for key accounts like 'Xactly'.
     """
-    sf=get_sf_connection()
+    sf = get_sf_connection()
     account_query = f"""
     SELECT Name
     FROM Account
@@ -264,13 +233,14 @@ def get_project_support(project_id):
 
     return None
 
+
 def fetch_cases():
     """
     Executes the SOQL query to fetch all relevant open cases from Salesforce.
     Filters by Status (New, Open, Assigned) and a predefined list of Owners.
     Also fetches related Case Comments to determine last interaction.
     """
-    sf=get_sf_connection()
+    sf = get_sf_connection()
       
     query = """
         SELECT
@@ -285,9 +255,11 @@ def fetch_cases():
             Severity__c,
             Sevone__c,
             IsEscalated,
+            CreatedDate,
             (select CreatedBy.Name,
             CreatedDate,
             IsPublished from CaseComments where IsPublished=true order by CreatedDate Desc)
+
             FROM Case
             WHERE Status IN ('New', 'Open', 'Assigned') and  Owner.Name IN (
             'Amit Bhojak', 'Amit Kumar', 'Amith Gujjar', 'Aniket Chinde',
@@ -303,25 +275,90 @@ def fetch_cases():
             'Srinivas Aaguri', 'Sumit Paul', 'Sumit', 'Sushmitha Rayalkeri', 'Syeda Sajida',
             'Tarun Buthala', 'Ullas Shenoy', 'Vikas R', 'Vilas Potadar', 'Vipul SG',
             'Vishal Mavi', 'Yogesh R', 'Zareena Bano', 'Zareena')"""
-    result=sf.query_all(query)
+    result = sf.query_all(query)
     return result["records"]
+
 
 def convert_to_ist(date_string):
     """
     Converts a UTC datetime string from Salesforce to IST (Indian Standard Time) string.
     Format: "dd-Mon HH:MM"
     """
-    if not date_string or date_string=="N/A":
+    if not date_string or date_string == "N/A":
         return "N/A"
 
     try:
-        utc_time = datetime.strptime(date_string, "%Y-%m-%dT%H:%M:%S.000+0000")
-        utc_time = pytz.utc.localize(utc_time)
+        # Handle both formats: with/without milliseconds, with Z or +0000
+        date_string = date_string.replace("Z", "+0000")
+        if "." in date_string:
+            # Has milliseconds
+            utc_time = datetime.strptime(date_string, "%Y-%m-%dT%H:%M:%S.%f%z")
+        else:
+            utc_time = datetime.strptime(date_string, "%Y-%m-%dT%H:%M:%S%z")
+        
         ist = pytz.timezone("Asia/Kolkata")
         ist_time = utc_time.astimezone(ist)
         return ist_time.strftime("%d-%b %H:%M")
+    except Exception as e:
+        print(f"Date conversion error: {e}")
+        return date_string  # Fallback to original string
+
+
+def calculate_sla_deadline(last_customer_comment_time, sla_hours_duration):
+    """
+    Calculates the SLA deadline timestamp based on last customer comment time + SLA hours.
+    Returns formatted IST string or "N/A" if calculation not possible.
+    """
+    if not last_customer_comment_time or last_customer_comment_time == "N/A" or not sla_hours_duration:
+        return "N/A"
+    
+    try:
+        # Parse the IST formatted time back to datetime
+        # Format: "dd-Mon HH:MM" - assume current year for parsing
+        current_year = datetime.now().year
+        dt = datetime.strptime(f"{current_year}-{last_customer_comment_time}", "%Y-%d-%b %H:%M")
+        
+        # Add SLA hours
+        deadline = dt + timedelta(hours=sla_hours_duration)
+        
+        # Format back to IST string
+        return deadline.strftime("%d-%b %H:%M")
     except:
-        return date_string
+        return "N/A"
+
+def calculate_sla_variance(deadline_str):
+    """
+    Calculates the difference between the SLA Deadline and Current IST Time.
+    Returns a formatted string indicating time remaining or time overdue.
+    """
+    if not deadline_str or deadline_str == "N/A":
+        return "N/A"
+        
+    try:
+        # 1. Get current time in IST
+        ist = pytz.timezone("Asia/Kolkata")
+        now_ist = datetime.now(ist)
+        
+        # 2. Parse the deadline string ("dd-Mon HH:MM") back to a timezone-aware datetime
+        # We use the current year as a safe assumption based on your existing logic
+        deadline_dt = datetime.strptime(f"{now_ist.year}-{deadline_str}", "%Y-%d-%b %H:%M")
+        deadline_dt = ist.localize(deadline_dt)
+        
+        # 3. Calculate the time difference (Deadline - Current Time)
+        diff = deadline_dt - now_ist
+        total_minutes = int(diff.total_seconds() / 60)
+        
+        # 4. Format the output based on whether it is positive or negative
+        if total_minutes < 0:
+            hours, mins = divmod(abs(total_minutes), 60)
+            return f"🚨 Overdue: {hours}h {mins}m"
+        else:
+            hours, mins = divmod(total_minutes, 60)
+            return f"⏳ Due in: {hours}h {mins}m"
+            
+    except Exception as e:
+        print(f"Variance calculation error: {e}")
+        return deadline_str  # Fallback to the absolute time string if parsing fails
 
 
 def get_processed_data():
@@ -332,20 +369,20 @@ def get_processed_data():
     3. Returns a clean Pandas DataFrame ready for display.
     """
     with st.spinner("Fetching Salesforce Cases..."):
-        cases=fetch_cases()
+        cases = fetch_cases()
 
     # Initialize session state for storing AI sentiments so we don't re-analyze every rerun
     if "sentiments" not in st.session_state:
-        st.session_state.sentiments={}
+        st.session_state.sentiments = {}
 
-    dashboard=[]
+    dashboard = []
 
     for case in cases:
         if case is None:
             continue
 
         # Extract basic fields
-        owner_name=(case.get("Owner") or {}).get("Name", "UNKNOWN")
+        owner_name = (case.get("Owner") or {}).get("Name", "UNKNOWN")
         customer_name = (case.get("Account") or {}).get("Name", "N/A")
         support_level = (case.get("Support_Level__c") or "N/A")
 
@@ -362,41 +399,60 @@ def get_processed_data():
             except Exception as e:
                 print(f"Xactly override failed: {e}")
 
-        severity=(case.get("Severity__c") or "N/A")
-        sevone=(case.get("SEVONE__c"))
-        escalated=(case.get("IsEscalated") or False)
+        severity = (case.get("Severity__c") or "N/A")
+        sevone = (case.get("SEVONE__c"))
+        escalated = (case.get("IsEscalated") or False)
 
         # Calculate Priority Score
-        case_score=calculate_score(sevone, severity, support_level, escalated)  
+        case_score = calculate_score(sevone, severity, support_level, escalated)  
         
         # Get SLA Hours duration
         sla_hours_duration = get_sla_hours(severity, support_level)      
 
         # Determine Last Commenter and Last Customer Comment Time
-        last_commenter="Internal Comment"
-        last_customer_comment_time="N/A"
+        last_commenter = "Internal Comment"
+        last_customer_comment_time = "N/A"
 
-        comments=(case.get("CaseComments") or {}).get("records", [])
+        comments = (case.get("CaseComments") or {}).get("records", [])
 
         if comments:
-            latest=comments[0]
-            created_by=(latest.get("CreatedBy") or {}).get("Name", "")
+            latest = comments[0]
+            created_by = (latest.get("CreatedBy") or {}).get("Name", "")
 
             # Check if the latest comment was by an internal support agent
             if created_by in OWNER_REGION_MAP:
-                last_commenter="Support Comment"
+                last_commenter = "Support Comment"
             else:
-                last_commenter="Customer Comment"
+                last_commenter = "Customer Comment"
 
             # Find the most recent comment specifically from the Customer
             for comment in comments:
-                comment_user=(comment.get("CreatedBy") or {}).get("Name","")
-                if comment_user == 'Customer Support User': # Assuming 'Customer Support User' is the name for external customers in SF
-                    last_customer_comment_time=convert_to_ist(comment.get("CreatedDate") or "N/A")
+                comment_user = (comment.get("CreatedBy") or {}).get("Name", "")
+                if comment_user == 'Customer Support User':  # Assuming 'Customer Support User' is the name for external customers in SF
+                    last_customer_comment_time = convert_to_ist(comment.get("CreatedDate") or "N/A")
                     break
         
         # Calculate SLA Deadline Timestamp based on last customer comment
         sla_deadline_time = calculate_sla_deadline(last_customer_comment_time, sla_hours_duration)
+        
+        # 👇 FALLBACK: If SLA deadline is N/A, use case CreatedDate in IST
+        if sla_deadline_time == "N/A" or not sla_deadline_time:
+            case_created_date = case.get("CreatedDate")
+            sla_deadline_time = convert_to_ist(case_created_date) if case_created_date else "N/A"
+
+        # Calculate SLA Deadline Timestamp based on last customer comment
+        sla_deadline_time = calculate_sla_deadline(last_customer_comment_time, sla_hours_duration)
+        
+        # 👇 FALLBACK: If SLA deadline is N/A, use case CreatedDate in IST
+        if sla_deadline_time == "N/A" or not sla_deadline_time:
+            case_created_date = case.get("CreatedDate")
+            sla_deadline_time = convert_to_ist(case_created_date) if case_created_date else "N/A"
+
+        # 👇 NEW: Calculate the relative time variance
+        if last_commenter == "Support Comment":
+            relative_sla_time = "✅ No SLA to meet"
+        else:
+            relative_sla_time = calculate_sla_variance(sla_deadline_time)
 
         # Append processed row to list
         dashboard.append({
@@ -412,11 +468,10 @@ def get_processed_data():
             "Sentiment": st.session_state.sentiments.get(case.get("CaseNumber"), "Not Analyzed"),
             "Case Score": case_score,
             "Last Customer Comment": last_customer_comment_time,
-            "SLA Response Time": sla_deadline_time
+            "SLA Response Time": relative_sla_time
         })
 
     return pd.DataFrame(dashboard), cases
-
 
 
 def apply_filters_and_ranking(df):
@@ -498,10 +553,10 @@ def render_table(filtered_df, cases, openai_service):
         headers[8].write("**Sentiment**")
         headers[9].write("**Last Comment**")
         headers[10].write("**LCC Time**")
-        headers[11].write("**SLA Deadline**") # New Column Header
+        headers[11].write("**SLA Deadline**")  # Shows SLA deadline or CreatedDate as fallback
         headers[12].write("**Rank**")
 
-        st.markdown("---") # Horizontal line separator
+        st.markdown("---")  # Horizontal line separator
         
         # Render Data Rows
         for index, row in filtered_df.iterrows():
@@ -545,7 +600,7 @@ def render_table(filtered_df, cases, openai_service):
                         
                         # Save to session state to persist across reruns
                         st.session_state.sentiments[row["Case Number"]] = sentiment
-                        st.rerun() # Rerun to update the UI with the new sentiment
+                        st.rerun()  # Rerun to update the UI with the new sentiment
             else:
                 # Display Sentiment with color coding
                 sentiment_lower = sentiment.lower()
@@ -561,8 +616,35 @@ def render_table(filtered_df, cases, openai_service):
             cols[9].write(row["Last Comment By"])
             cols[10].write(row["Last Customer Comment"])
             
-            # New SLA Column - Shows the calculated deadline time
+            # SLA Column - Shows deadline or fallback to CreatedDate
             cols[11].write(row["SLA Response Time"])
             
-            # Rank Column - Styled with white color for visibility (per user preference)
+            # Rank Column - Styled with white color for visibility
             cols[12].markdown(f"<div style='color: #FFFFFF; font-weight: 600; font-size: 14px;'>{row['Sequential_Rank']}</div>", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------
+# MAIN APP
+# ---------------------------------------------------
+
+def main():
+    inject_custom_css()
+    
+    st.title("🎯 Support Case Dashboard")
+    
+    # Initialize OpenAI service if needed for sentiment analysis
+    from services.openai_service import OpenAIService
+    openai_service = OpenAIService()
+    
+    # Fetch and process data
+    df, raw_cases = get_processed_data()
+    
+    # Apply filters and ranking
+    filtered_df = apply_filters_and_ranking(df)
+    
+    # Render the table
+    render_table(filtered_df, raw_cases, openai_service)
+
+
+if __name__ == "__main__":
+    main()
