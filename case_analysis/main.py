@@ -7,8 +7,6 @@ import streamlit as st
 from case_analysis.services.openai_service import OpenAIService
 
 # Import specific functions from the page modules. 
-# Note: Importing from 'pages' suggests a multi-page app structure, 
-# but here they are used as modular components for the main dashboard.
 from case_analysis.pages.Reporttopleft import (
     inject_custom_css, 
     get_processed_data, 
@@ -16,6 +14,7 @@ from case_analysis.pages.Reporttopleft import (
     render_table
 )
 from case_analysis.pages.Charttopright import render_chart
+from case_analysis.pages.Chart_30_days import render_30_day_chart
 
 # ---------------------------------------------------
 # 0. HELPER FUNCTIONS FOR REFRESH
@@ -24,20 +23,14 @@ def refresh_dashboard():
     """
     Clears ALL caches and session state to force a complete 
     reload of data from sources (Salesforce, APIs, etc.)
-    
-    This is crucial because Streamlit caches data (@st.cache_data) to improve performance.
-    Without this, clicking 'Refresh' might just show old cached data.
     """
-    # 1. Clear Streamlit Data Cache (covers @st.cache_data)
-    # This forces get_processed_data() to re-run the Salesforce query next time it's called.
+    # 1. Clear Streamlit Data Cache 
     st.cache_data.clear()
     
-    # 2. Clear Streamlit Resource Cache (covers @st.cache_resource)
-    # This forces the Salesforce connection object to be recreated.
+    # 2. Clear Streamlit Resource Cache 
     st.cache_resource.clear()
     
     # 3. Clear specific Session State keys related to UI filters/state
-    # We remove user selections (like selected regions) so the dashboard resets to default view.
     keys_to_clear = [
         'filter_case_id', 
         'filter_region', 
@@ -50,7 +43,6 @@ def refresh_dashboard():
             del st.session_state[key]
     
     # 4. Force a full script rerun
-    # Immediately restarts the script from top to bottom with clean state.
     st.rerun()
 
 # ---------------------------------------------------
@@ -60,16 +52,14 @@ st.set_page_config(
     page_title="Prioritization Dashboard", 
     page_icon="📊",
     layout="wide", # Uses full browser width
-    initial_sidebar_state="collapsed" # Hides sidebar by default for a cleaner look
+    initial_sidebar_state="collapsed" # Hides sidebar by default
 )
 
 # Initialize a session state variable for the dynamic accent color
-# This allows the theme toggle button to persist its state across reruns.
 if 'accent_color' not in st.session_state:
     st.session_state.accent_color = "#3B82F6"  # Default: Premium Corporate Blue
 
 # Toggle thematic styles professionally
-# When clicked, swaps between Blue and Slate Grey accent colors.
 if st.button("🎨 Toggle Accent Theme (Blue / Slate)"):
     if st.session_state.accent_color == "#3B82F6":
         st.session_state.accent_color = "#64748B"  # Switch to Slate
@@ -80,7 +70,6 @@ if st.button("🎨 Toggle Accent Theme (Blue / Slate)"):
 inject_custom_css()
 
 # Inject Refined, Professional UI Styles
-# This block uses f-strings to inject dynamic CSS based on the selected accent color.
 st.markdown(
     f"""
     <style>
@@ -99,16 +88,15 @@ st.markdown(
     }}
     
     /* Target ONLY top-level dashboard columns inside our main block */
-    /* This creates the 'Card' effect for the Left (Table) and Right (Chart) panels */
     .main-dashboard-row [data-testid="stColumn"] {{
-        background-color: #1E293B !important; /* Slightly lighter slate for cards */
+        background-color: #1E293B !important; 
         padding: 1.5rem !important;
         border-radius: 12px !important;
         border: 1px solid #334155 !important;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
     }}
 
-    /* Reset styles for nested columns (inside the table/chart) so they don't inherit the card background */
+    /* Reset styles for nested columns (inside the table/chart) */
     .main-dashboard-row [data-testid="stColumn"] [data-testid="stColumn"] {{
         background-color: transparent !important;
         padding: 0px !important;
@@ -118,10 +106,9 @@ st.markdown(
     }}
 
     /* --- INCREASE TABLE FONT SIZE --- */
-    /* Specific selectors to target text inside the table container */
     .main-dashboard-row [data-testid="stColumn"]:first-child p,
     .main-dashboard-row [data-testid="stColumn"]:first-child div[data-testid="stHorizontalBlock"] p {{
-        font-size: 14px !important; /* Increased from default ~12px for readability */
+        font-size: 14px !important; 
         line-height: 1.4 !important;
     }}
     
@@ -134,9 +121,9 @@ st.markdown(
         color: #FFFFFF !important;
     }}
 
-    /* Widget Labels styling (e.,g. Multiselect labels) */
+    /* Widget Labels styling */
     label, label p, label span {{
-        color: #94A3B8 !important; /* Muted grey for labels */
+        color: #94A3B8 !important; 
         font-weight: 500 !important;
         font-size: 0.9rem !important;
         letter-spacing: 0.5px;
@@ -157,7 +144,7 @@ st.markdown(
     
     div[data-testid="stButton"] button:hover {{
         border-color: {st.session_state.accent_color} !important;
-        box-shadow: 0 0 10px {st.session_state.accent_color}40; /* Glow effect on hover */
+        box-shadow: 0 0 10px {st.session_state.accent_color}40; 
     }}
 
     /* Clean, Modern Corporate Title */
@@ -190,54 +177,53 @@ st.markdown(
 # ---------------------------------------------------
 # 2. EXECUTIVE HEADER SECTION WITH REFRESH BUTTON
 # ---------------------------------------------------
-
-# Create a row for Title (80% width) and Button (20% width)
 header_col1, header_col2 = st.columns([0.8, 0.2])
 
 with header_col1:
-    # Render the main title using custom HTML/CSS class
     st.markdown('<div class="dashboard-title">GCS Prioritization and Utilization Dashboard</div>', unsafe_allow_html=True)
-    # Render the colored accent bar below the title
     st.markdown(f'<div class="accent-bar"></div>', unsafe_allow_html=True)
 
 with header_col2:
-    # Add the refresh button aligned to the right
-    # use_container_width=True makes it fill the column for better clickability
     if st.button("🔄 Refresh Dashboard", use_container_width=True, type="secondary"):
         refresh_dashboard()
 
 # ---------------------------------------------------
 # 3. RUN EXTRACTIONS, FILTERS & SELECTION LOGIC
 # ---------------------------------------------------
-# get_processed_data() returns the DataFrame and raw cases list.
+# df contains strictly active/open cases from Reporttopleft
 df, cases = get_processed_data()
-
-# apply_filters_and_ranking() renders the filter widgets (Region/Owner) 
-# and returns the filtered/sorted DataFrame.
-filtered_df = apply_filters_and_ranking(df)
+filtered_df, active_owners = apply_filters_and_ranking(df)
 
 # ---------------------------------------------------
-# 4. CONCURRENT UI ELEMENTS (LAYOUT)
+# 4. FULL WIDTH TABLE
 # ---------------------------------------------------
-# Wrap the main content in a div with class 'main-dashboard-row' 
-# so our CSS targets only these columns.
 st.markdown('<div class="main-dashboard-row">', unsafe_allow_html=True)
 
-# CHANGED: Ratio [3, 1] gives 75% width to Table and 25% to Chart
-left, right = st.columns([3, 1], gap="large")
+# Render the detailed case table FULL WIDTH
+render_table(filtered_df, cases, OpenAIService())
 
-with left:
-    # Render the detailed case table with AI sentiment analysis buttons
-    render_table(filtered_df, cases, OpenAIService())
+st.markdown('</div>', unsafe_allow_html=True)
+st.markdown("<br>", unsafe_allow_html=True) # Give a little breathing room
 
-with right:
-    # Render the gauge chart showing total workload/utilization
+# ---------------------------------------------------
+# 5. CHARTS ROW (MOVED DOWN)
+# ---------------------------------------------------
+st.markdown('<div class="main-dashboard-row">', unsafe_allow_html=True)
+
+chart_col1, chart_col2 = st.columns(2, gap="large")
+
+with chart_col1:
+    # Render active workload meter
     render_chart(filtered_df)
+
+with chart_col2:
+    # Render 30-day meter (passes filtered_df just to sync selected UI filters)
+    render_30_day_chart(active_owners)
 
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------
-# 5. FOOTER
+# 6. FOOTER
 # ---------------------------------------------------
 st.markdown("---")
 st.caption("🔄 Dashboard auto-refreshes every 1 Hour directly from Salesforce.")

@@ -256,6 +256,7 @@ def fetch_cases():
             Sevone__c,
             IsEscalated,
             CreatedDate,
+            ClosedDate,
             (select CreatedBy.Name,
             CreatedDate,
             IsPublished from CaseComments where IsPublished=true order by CreatedDate Desc)
@@ -482,39 +483,47 @@ def apply_filters_and_ranking(df):
     c1, c2 = st.columns(2)
 
     with c1:
-        regions = sorted(df["Region"].dropna().unique())
-        selected_regions = st.multiselect(":earth_africa: Region", regions, default=[])
+        # 👇 NEW: Get ALL possible regions from the map, not just ones with active cases
+        all_regions = sorted(list(set(OWNER_REGION_MAP.values())))
+        selected_regions = st.multiselect(":earth_africa: Region", all_regions, default=[])
 
     # Logic to handle empty state gracefully
     if selected_regions:
         temp_df = df[df["Region"].isin(selected_regions)]
-        available_owners = sorted(temp_df["Case Owner"].dropna().unique())
+        
+        # 👇 NEW: Get ALL possible owners for the selected regions from the map,
+        # regardless of whether they actually have cases in the DataFrame right now.
+        available_owners = sorted([
+            owner for owner, region in OWNER_REGION_MAP.items() 
+            if region in selected_regions
+        ])
     else:
         temp_df = df.iloc[:0]  # Empty DF but keeps all columns/schema
         available_owners = []
-
     with c2:
-        selected_owners = st.multiselect(":bust_in_silhouette: Owner", available_owners, default=[])
+            selected_owners = st.multiselect(":bust_in_silhouette: Owner", available_owners, default=[])
 
-    # If no region selected, return empty DF to show message in render_table
+        # 👇 NEW: Figure out exactly which owners the user wants to see
+        # If they picked specific owners, use those. If they left it blank, use all available in the selected region.
+    active_owner_filter = selected_owners if selected_owners else available_owners
+
+        # If no region selected, return empty DF and empty owner list
     if not selected_regions:
-        return temp_df
+            return temp_df, []
 
-    # Apply Owner filter if selected
+        # Apply Owner filter if selected
     if selected_owners:
-        filtered_df = temp_df[temp_df["Case Owner"].isin(selected_owners)]
+            filtered_df = temp_df[temp_df["Case Owner"].isin(selected_owners)]
     else:
-        filtered_df = temp_df
+            filtered_df = temp_df
 
-    # Sort and Rank
+        # Sort and Rank
     if not filtered_df.empty:
-        # Sort by Owner, then by Case Score (highest first)
-        filtered_df = filtered_df.sort_values(by=["Case Owner", "Case Score"], ascending=[True, False])
-        # Add a rank column that resets for each Owner
-        filtered_df["Sequential_Rank"] = filtered_df.groupby("Case Owner").cumcount() + 1
+            filtered_df = filtered_df.sort_values(by=["Case Owner", "Case Score"], ascending=[True, False])
+            filtered_df["Sequential_Rank"] = filtered_df.groupby("Case Owner").cumcount() + 1
 
-    return filtered_df
-
+        # 👇 NEW: Return both the DataFrame AND the list of active owners
+    return filtered_df, active_owner_filter
 
 # ---------------------------------------------------
 # TABLE RENDERING
@@ -528,9 +537,6 @@ def render_table(filtered_df, cases, openai_service):
     st.subheader(":clipboard: AI Case Monitoring")
     
     # Show a clean message when no filters are selected
-    if filtered_df.empty:
-        st.info("👈 Please select at least one **Region** to view cases.")
-        return
 
     # Container with fixed height to match the chart on the right
     report_box = st.container(height=350)

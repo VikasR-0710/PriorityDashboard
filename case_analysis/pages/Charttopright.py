@@ -50,37 +50,23 @@ def render_chart(filtered_df):
                 "font":{"size":50, "color": "#F8FAFC"} # Large white font for the score
             },
 
-            gauge={
+                gauge={
                 'axis':{
                     'range':[0,max_score],
                     'tickwidth':1,
                     'tickcolor': "#F8FAFC",
                     'tickfont': dict(color="#F8FAFC", size=12)
                 },
-
-                'bar':{
-                    # The actual progress bar color (Dark Green)
-                    'color':'rgba(0, 100, 0, 0.85)',
-                    'thickness':0.35  # Thickness of the progress bar
-                },
-
+                # 👇 NEW: Updated to match the Dark Green from the main chart
+                'bar':{'color':'rgba(0, 100, 0, 0.85)', 'thickness':0.35},
                 'steps':[
-                    # Background zones for the gauge
-                    # Green Zone (0-40%)
+                    # 👇 NEW: Updated to match the Green/Yellow/Red zones
                     {'range':[0,max_score*0.4],'color':'rgba(144, 238, 144, 0.4)'},
-                    
-                    # Yellow Zone (40-75%)
                     {'range':[max_score*0.4,max_score*0.75],'color':'rgba(255, 255, 0, 0.4)'},
-                    
-                    # Red Zone (75-100%)
                     {'range':[max_score*0.75,max_score],'color':'rgba(255, 0, 0, 0.4)'}
                 ],
-
                 'threshold':{
-                    'line':{
-                        'color':'#FFFFFF',
-                        'width':5
-                    },
+                    'line':{'color':'#FFFFFF', 'width':5},
                     'thickness':0.9,
                     'value':total_score
                 }
