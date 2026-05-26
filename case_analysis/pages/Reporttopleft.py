@@ -33,9 +33,9 @@ OWNER_REGION_MAP = {
     "Santosh Veduruvada": "EMEA",
     "Sivagnana Bharathi Nagaraj": "EMEA",
     "Ullas Shenoy": "EMEA",
-    "Vipul SG": "EMEA",
+    "Vipul S G": "EMEA",
     "Vilas Potadar": "EMEA",
-    "Chethan Kumar P.": "EMEA",
+    "Chethan Kumara P": "EMEA",
     "Chandra Sai Surya Santosh Veduruvada": "EMEA",
 
     # NA EAST
@@ -72,7 +72,6 @@ OWNER_REGION_MAP = {
     "Amit Kumar": "NA WEST",
     "Karthik Dosapati": "NA WEST",
     "Peter Kyller": "NA WEST",
-    "Anthony Pham": "NA WEST",
     "ZAREENA BANO": "NA WEST",
     "Karalie Murray": "NA WEST",
 
@@ -264,17 +263,17 @@ def fetch_cases():
             FROM Case
             WHERE Status IN ('New', 'Open', 'Assigned') and  Owner.Name IN (
             'Amit Bhojak', 'Amit Kumar', 'Amith Gujjar', 'Aniket Chinde',
-            'Anthony Pham', 'Aqsa Pandith', 'Becca Lozano', 'Chethan Kumar P.', 'Ganesh Babu',
+            'Aqsa Pandith', 'Becca Lozano', 'Chethan Kumara P', 'Ganesh Babu',
             'Gnanasiri Pechetti', 'Imari Killikelly', 'Infant Raj.', 'Ishaq Mathina', 
             'Kalyan Kumar', 'Karalie Murray', 'Karthik Dosapati', 'Kaushik Patowary', 'Mahesh P M',
             'Merlyn Pushparaj', 'Mohamed Ramzin', 'Mohammad Raza', 'Mohammed Usman', 'Monika Sihag',
             'Mugilan Gowthaman', 'Naveen Kumar Surisetti', 'Nilanjan Roy', 'Nupur Rao', 'Palak Kharche',
             'Pallavi M R', 'Payal Gupta', 'Peter Kyller', 'Pooja Singh', 'Poonam Pandey',
             'Prabu Rajendran', 'Prabu R', 'Rohit Nargundkar', 'Sakthi Devi SK', 'Sanjay Kademani',
-            'Santosh Veduruvada', 'Santi Sahoo', 'Selvin Raja', 'Shahrukh Shahzad', 'Shakti Prasad Pati',
+            'Chandra Sai Surya Santosh Veduruvada', 'Santi Sahoo', 'Selvin Raja', 'Shahrukh Shahzad', 'Shakti Prasad Pati',
             'Shreyas G Nambiar', 'Shivendra Yadav', 'Sindhu M Y', 'Sivagnana Bharathi Nagaraj', 'Sivaji Koya',
             'Srinivas Aaguri', 'Sumit Paul', 'Sumit', 'Sushmitha Rayalkeri', 'Syeda Sajida',
-            'Tarun Buthala', 'Ullas Shenoy', 'Vikas R', 'Vilas Potadar', 'Vipul SG',
+            'Tarun Buthala', 'Ullas Shenoy', 'Vikas R', 'Vilas Potadar', 'Vipul S G',
             'Vishal Mavi', 'Yogesh R', 'Zareena Bano', 'Zareena')"""
     result = sf.query_all(query)
     return result["records"]

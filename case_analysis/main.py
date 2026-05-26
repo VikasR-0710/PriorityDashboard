@@ -16,6 +16,7 @@ from case_analysis.pages.Reporttopleft import (
 from case_analysis.pages.Charttopright import render_chart
 from case_analysis.pages.Chart_30_days import render_30_day_chart
 
+
 # ---------------------------------------------------
 # 0. HELPER FUNCTIONS FOR REFRESH
 # ---------------------------------------------------

@@ -1,115 +1,161 @@
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
+from datetime import datetime, timedelta
 
 # Import necessary functions and maps from your main logic file
 from case_analysis.pages.Reporttopleft import (
     get_sf_connection,
     calculate_score,
-    get_project_support,
     OWNER_REGION_MAP
 )
 
+# Define the owner list locally to avoid importing huge lists repeatedly if possible, 
+# or keep using the imported map keys.
+OWNER_LIST = [
+    'Amit Bhojak', 'Amit Kumar', 'Amith Gujjar', 'Aniket Chinde',
+    'Aqsa Pandith', 'Becca Lozano', 'Chethan Kumara P', 'Ganesh Babu',
+    'Gnanasiri Pechetti', 'Imari Killikelly', 'Infant Raj.', 'Ishaq Mathina', 
+    'Kalyan Kumar', 'Karalie Murray', 'Karthik Dosapati', 'Kaushik Patowary', 'Mahesh P M',
+    'Merlyn Pushparaj', 'Mohamed Ramzin', 'Mohammad Raza', 'Mohammed Usman', 'Monika Sihag',
+    'Mugilan Gowthaman', 'Naveen Kumar Surisetti', 'Nilanjan Roy', 'Nupur Rao', 'Palak Kharche',
+    'Pallavi M R', 'Payal Gupta', 'Peter Kyller', 'Pooja Singh', 'Poonam Pandey',
+    'Prabu Rajendran', 'Prabu R', 'Rohit Nargundkar', 'Sakthi Devi SK', 'Sanjay Kademani',
+    'Chandra Sai Surya Santosh Veduruvada', 'Santi Sahoo', 'Selvin Raja', 'Shahrukh Shahzad', 'Shakti Prasad Pati',
+    'Shreyas G Nambiar', 'Shivendra Yadav', 'Sindhu M Y', 'Sivagnana Bharathi Nagaraj', 'Sivaji Koya',
+    'Srinivas Aaguri', 'Sumit Paul', 'Sumit', 'Sushmitha Rayalkeri', 'Syeda Sajida',
+    'Tarun Buthala', 'Ullas Shenoy', 'Vikas R', 'Vilas Potadar', 'Vipul S G',
+    'Vishal Mavi', 'Yogesh R', 'Zareena Bano', 'Zareena'
+]
+
+@st.cache_data(ttl=3600)
 @st.cache_data(ttl=3600)
 def get_closed_cases_data():
     """
-    Fetches and processes exclusively CLOSED cases from the last 30 days.
-    Uses LAST_N_DAYS:30 in SOQL to let Salesforce handle the date filtering efficiently.
+    Fetches CLOSED cases from the last 30 days.
+    Optimized: Minimal fields, no nested loops for API calls.
+    Robust handling of missing columns.
     """
     sf = get_sf_connection()
     
-    # We do not pull CaseComments here to drastically speed up the query
-    query = """
+    # Format owner list for SOQL IN clause
+    owner_names_str = "', '".join(OWNER_LIST)
+    
+    query = f"""
         SELECT
             Id,
             CaseNumber,
-            Subject,
-            Status,
             Owner.Name,
             Account.Name,
-            AccountName__c,
             Support_Level__c,
             Severity__c,
             Sevone__c,
             IsEscalated,
-            CreatedDate,
             ClosedDate
         FROM Case
         WHERE Status = 'Closed' 
           AND ClosedDate = LAST_N_DAYS:30
-          AND Owner.Name IN (
-            'Amit Bhojak', 'Amit Kumar', 'Amith Gujjar', 'Aniket Chinde',
-            'Anthony Pham', 'Aqsa Pandith', 'Becca Lozano', 'Chethan Kumar P.', 'Ganesh Babu',
-            'Gnanasiri Pechetti', 'Imari Killikelly', 'Infant Raj.', 'Ishaq Mathina', 
-            'Kalyan Kumar', 'Karalie Murray', 'Karthik Dosapati', 'Kaushik Patowary', 'Mahesh P M',
-            'Merlyn Pushparaj', 'Mohamed Ramzin', 'Mohammad Raza', 'Mohammed Usman', 'Monika Sihag',
-            'Mugilan Gowthaman', 'Naveen Kumar Surisetti', 'Nilanjan Roy', 'Nupur Rao', 'Palak Kharche',
-            'Pallavi M R', 'Payal Gupta', 'Peter Kyller', 'Pooja Singh', 'Poonam Pandey',
-            'Prabu Rajendran', 'Prabu R', 'Rohit Nargundkar', 'Sakthi Devi SK', 'Sanjay Kademani',
-            'Santosh Veduruvada', 'Santi Sahoo', 'Selvin Raja', 'Shahrukh Shahzad', 'Shakti Prasad Pati',
-            'Shreyas G Nambiar', 'Shivendra Yadav', 'Sindhu M Y', 'Sivagnana Bharathi Nagaraj', 'Sivaji Koya',
-            'Srinivas Aaguri', 'Sumit Paul', 'Sumit', 'Sushmitha Rayalkeri', 'Syeda Sajida',
-            'Tarun Buthala', 'Ullas Shenoy', 'Vikas R', 'Vilas Potadar', 'Vipul SG',
-            'Vishal Mavi', 'Yogesh R', 'Zareena Bano', 'Zareena'
-        )
+          AND Owner.Name IN ('{owner_names_str}')
     """
-    result = sf.query_all(query)
-    cases = result["records"]
     
-    dashboard = []
-    for case in cases:
-        if case is None:
-            continue
-            
-        owner_name = (case.get("Owner") or {}).get("Name", "UNKNOWN")
-        customer_name = (case.get("Account") or {}).get("Name", "N/A")
-        support_level = (case.get("Support_Level__c") or "N/A")
+    try:
+        result = sf.query_all(query)
+        records = result["records"]
+    except Exception as e:
+        st.error(f"Error fetching closed cases: {e}")
+        return pd.DataFrame(columns=["Region", "Case Owner", "Case Score", "Closed Date"])
+
+    if not records:
+        return pd.DataFrame(columns=["Region", "Case Owner", "Case Score", "Closed Date"])
+
+    # Convert to DataFrame immediately for vectorized processing
+    df = pd.json_normalize(records)
+    
+    # Rename columns to match expected schema
+    # Note: json_normalize flattens nested dicts like Owner.Name -> Owner.Name
+    rename_map = {
+        'Owner.Name': 'Case Owner',
+        'Account.Name': 'Customer Name',
+        'Support_Level__c': 'Support Level',
+        'Severity__c': 'Severity',
+        'Sevone__c': 'Sevone',
+        'IsEscalated': 'Escalated',
+        'ClosedDate': 'Closed Date'
+    }
+    
+    # Only rename columns that actually exist in the dataframe to avoid KeyError
+    existing_cols = [col for col in rename_map.keys() if col in df.columns]
+    df.rename(columns={k: rename_map[k] for k in existing_cols}, inplace=True)
+
+    # Ensure all required columns exist, even if they were dropped by pandas due to all-nulls
+    required_cols = ['Case Owner', 'Support Level', 'Severity', 'Sevone', 'Escalated', 'Closed Date']
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = None  # Create column with None/NaN if missing
+
+    # Fill NaNs safely
+    df['Support Level'] = df['Support Level'].fillna('Standard')
+    df['Severity'] = df['Severity'].fillna('S4')
+    
+    # Handle Sevone: It might be boolean or string depending on SF setup. 
+    # Ensure it's treated as boolean for calculate_score
+    if 'Sevone' in df.columns:
+        # If it's already boolean, fillna works. If it's object/string, convert first.
+        if df['Sevone'].dtype == 'object':
+             df['Sevone'] = df['Sevone'].apply(lambda x: True if x else False)
+        else:
+             df['Sevone'] = df['Sevone'].fillna(False)
+    else:
+        df['Sevone'] = False
+
+    if 'Escalated' in df.columns:
+         if df['Escalated'].dtype == 'object':
+             df['Escalated'] = df['Escalated'].apply(lambda x: True if x else False)
+         else:
+             df['Escalated'] = df['Escalated'].fillna(False)
+    else:
+        df['Escalated'] = False
         
-        # Override support logic for specific accounts
-        project_id = case.get("AccountName__c")
-        if (customer_name != "N/A" and "Xactly" in customer_name and project_id):
-            try:
-                cached_support = get_project_support(project_id)
-                if cached_support:
-                    support_level = cached_support
-            except Exception as e:
-                pass
+    df['Case Owner'] = df['Case Owner'].fillna('UNKNOWN')
 
-        severity = (case.get("Severity__c") or "N/A")
-        sevone = (case.get("SEVONE__c"))
-        escalated = (case.get("IsEscalated") or False)
+    # Map Region
+    df['Region'] = df['Case Owner'].map(OWNER_REGION_MAP).fillna('UNKNOWN')
 
-        # Calculate Priority Score
-        case_score = calculate_score(sevone, severity, support_level, escalated)  
-        
-        dashboard.append({
-            "Region": OWNER_REGION_MAP.get(owner_name, "UNKNOWN"),
-            "Case Owner": owner_name,
-            "Case Score": case_score,
-            "Closed Date": case.get("ClosedDate")
-        })
+    # Calculate Score Vectorially
+    # Note: calculate_score expects individual values, so we apply it row-wise 
+    # but this is still faster than the previous loop because we aren't making API calls.
+    df['Case Score'] = df.apply(
+        lambda row: calculate_score(
+            row['Sevone'], 
+            row['Severity'], 
+            row['Support Level'], 
+            row['Escalated']
+        ), 
+        axis=1
+    )
 
-    return pd.DataFrame(dashboard)
+    # Keep only necessary columns for the chart
+    return df[['Region', 'Case Owner', 'Case Score', 'Closed Date']]
 
 
 def render_30_day_chart(active_owners):
     """
     Renders the Gauge Chart (30-Day Utilization Meter).
-    Cross-references the active_owners list to sync UI filters (Region/Owner).
     """
     st.markdown("<h3 style='color: #F8FAFC; margin-top: 0; margin-bottom: 10px;'>📊 30-Day Utilization (Closed)</h3>", unsafe_allow_html=True)
 
     # 1. Fetch the dedicated 30-day closed data
+    # The cache handles the heavy lifting. If data is cached, this is instant.
+    # If not, it runs the optimized query above.
     with st.spinner("Fetching Closed History..."):
         closed_df = get_closed_cases_data()
 
-    # 2. Filter based on the dropdown selections
+    # 2. Filter based on the dropdown selections passed from main.py
     if not active_owners:
-        # If no regions/owners are selected, show empty chart
         recent_df = pd.DataFrame()
     else:
         if not closed_df.empty:
-            # 👇 NEW: Filter directly against the active_owners list passed from main.py
+            # Filter directly against the active_owners list
             recent_df = closed_df[closed_df["Case Owner"].isin(active_owners)]
         else:
             recent_df = pd.DataFrame()
@@ -117,7 +163,7 @@ def render_30_day_chart(active_owners):
     # 3. Calculate scores
     total_score = recent_df["Case Score"].sum() if not recent_df.empty else 0
     selected_regions_count = recent_df["Region"].nunique() if not recent_df.empty else 0
-    selected_owners_count = len(active_owners) # Show count based on selection, not just who has cases
+    selected_owners_count = len(active_owners) 
 
     # Dynamic max scale
     max_score = max(total_score + 50, 100)
