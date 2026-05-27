@@ -53,7 +53,7 @@ def get_closed_cases_data():
             IsEscalated,
             ClosedDate
         FROM Case
-        WHERE Status = 'Closed' 
+        WHERE Status in ('Closed','Pending Customer') 
           AND ClosedDate = LAST_N_DAYS:30
           AND Owner.Name IN ('{owner_names_str}')
     """

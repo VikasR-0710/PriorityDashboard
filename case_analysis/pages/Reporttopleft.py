@@ -15,7 +15,6 @@ sf = service.get_connection()
 # ---------------------------------------------------
 
 # Map of Owner Names to their respective Regions.
-# Used to assign a 'Region' to each case for filtering.
 OWNER_REGION_MAP = {
     # APAC
     "Sakthi Devi SK": "APAC",
@@ -89,11 +88,9 @@ OWNER_REGION_MAP = {
 def inject_custom_css():
     """
     Injects CSS to hide the default Streamlit sidebar and adjust basic spacing.
-    This ensures the dashboard looks like a standalone app rather than a Streamlit page.
     """
     st.markdown("""
 <style>
-    /* Nuke Streamlit's automatic multi-page nav sidebar elements completely */
     [data-testid="stSidebar"] { display: none !important; }
     [data-testid="collapsedControl"] { display: none !important; }
     
@@ -111,8 +108,6 @@ def inject_custom_css():
 def get_sf_connection():
     """
     Creates and caches the Salesforce connection object.
-    @st.cache_resource ensures the connection is created once per session, 
-    not on every script rerun.
     """
     service = CaseService()
     return service.get_connection()
@@ -122,73 +117,41 @@ def get_sf_connection():
 # ---------------------------------------------------
 
 def calculate_score(sevone, severity, support_level, escalated):
-    """
-    Calculates a priority score for a case based on severity, support level, and status.
-    Higher score = Higher priority.
-    
-    Logic:
-    - SevOne or Escalated cases get highest scores (14 or 13).
-    - Otherwise, uses a lookup map based on Severity (S1-S4) and Support Level.
-    """
     if sevone:
         return 14
-
     if escalated:
         return 13
 
     score_map = {
-        ("S1", "Premium Plus"): 12,
-        ("S1", "Premium (24x7)"): 11,
-        ("S1", "Standard"): 10,
-
-        ("S2", "Premium Plus"): 9,
-        ("S2", "Premium (24x7)"): 8,
-        ("S2", "Standard"): 7,
-
-        ("S3", "Premium Plus"): 6,
-        ("S3", "Premium (24x7)"): 5,
-        ("S3", "Standard"): 4,
-
-        ("S4", "Premium Plus"): 3,
-        ("S4", "Premium (24x7)"): 2,
-        ("S4", "Standard"): 1
+        ("S1", "Premium Plus"): 12, ("S1", "Premium (24x7)"): 12, ("S1", "Standard"): 10,
+        ("S2", "Premium Plus"): 9, ("S2", "Premium (24x7)"): 8, ("S2", "Standard"): 7,
+        ("S3", "Premium Plus"): 6, ("S3", "Premium (24x7)"): 5, ("S3", "Standard"): 4,
+        ("S4", "Premium Plus"): 3, ("S4", "Premium (24x7)"): 2, ("S4", "Standard"): 1
     }
-
     return score_map.get((severity, support_level), 0)
 
 
 def get_sla_hours(severity, support_level):
-    """
-    Returns the SLA response time in HOURS (float) based on Severity and Support Level.
-    Used to calculate the deadline for the next response.
-    """
     if not severity or severity == "N/A":
         return None
     
-    # Normalize support level for matching
     sl_lower = support_level.lower() if support_level else ""
-    
-    # Check if Premium (covers 'Premium Plus' and 'Premium (24x7)')
     is_premium = "premium" in sl_lower
     
-    # Mapping based on SLA policy table
     sla_map = {
-        "S1": {"premium": 0.5, "standard": 1.0},   # 30 mins vs 60 mins
-        "S2": {"premium": 1.0, "standard": 4.0},   # 1 hour vs 4 hours
-        "S3": {"premium": 2.0, "standard": 6.0},   # 2 hours vs 6 hours
-        "S4": {"premium": 6.0, "standard": 8.0},   # 6 hours vs 8 hours
+        "S1": {"premium": 0.5, "standard": 1.0},
+        "S2": {"premium": 1.0, "standard": 4.0},
+        "S3": {"premium": 2.0, "standard": 6.0},
+        "S4": {"premium": 6.0, "standard": 8.0},
     }
     
     severity_key = severity.strip().upper()
-    
-    # Handle variations of S1/SevOne
     if severity_key.startswith("SEV") or severity_key == "SEVONE":
          severity_key = "S1" 
     elif severity_key not in ["S1", "S2", "S3", "S4"]:
         return None
 
     tier = "premium" if is_premium else "standard"
-    
     try:
         return sla_map[severity_key][tier]
     except KeyError:
@@ -197,71 +160,28 @@ def get_sla_hours(severity, support_level):
 
 @st.cache_data(ttl=3600)
 def get_project_support(project_id):
-    """
-    Fetches the Support Level for a specific Account/Project from Salesforce.
-    Cached for 1 hour to reduce API calls.
-    Used specifically for overriding support levels for key accounts like 'Xactly'.
-    """
     sf = get_sf_connection()
-    account_query = f"""
-    SELECT Name
-    FROM Account
-    WHERE Id='{project_id}'
-    LIMIT 1
-    """
-
+    account_query = f"SELECT Name FROM Account WHERE Id='{project_id}' LIMIT 1"
     account_result = sf.query(account_query)
-
     if not account_result["records"]:
         return None
-
     project_name = account_result["records"][0].get("Name")
-
-    support_query = f"""
-    SELECT Support_Level__c
-    FROM Case
-    WHERE Account.Name LIKE '%{project_name}%'
-    AND Support_Level__c != NULL
-    LIMIT 1
-    """
-
+    support_query = f"SELECT Support_Level__c FROM Case WHERE Account.Name LIKE '%{project_name}%' AND Support_Level__c != NULL LIMIT 1"
     support_result = sf.query(support_query)
-
     if support_result["records"]:
         return support_result["records"][0].get("Support_Level__c")
-
     return None
 
 
 def fetch_cases():
-    """
-    Executes the SOQL query to fetch all relevant open cases from Salesforce.
-    Filters by Status (New, Open, Assigned) and a predefined list of Owners.
-    Also fetches related Case Comments to determine last interaction.
-    """
     sf = get_sf_connection()
-      
     query = """
         SELECT
-            Id,
-            CaseNumber,
-            Subject,
-            Status,
-            Owner.Name,
-            Account.Name,
-            AccountName__c,
-            Support_Level__c,
-            Severity__c,
-            Sevone__c,
-            IsEscalated,
-            CreatedDate,
-            ClosedDate,
-            (select CreatedBy.Name,
-            CreatedDate,
-            IsPublished from CaseComments where IsPublished=true order by CreatedDate Desc)
-
-            FROM Case
-            WHERE Status IN ('New', 'Open', 'Assigned') and  Owner.Name IN (
+            Id, CaseNumber, Subject, Status, Owner.Name, Account.Name, AccountName__c,
+            Support_Level__c, Severity__c, Sevone__c, IsEscalated, CreatedDate, ClosedDate,
+            (select CreatedBy.Name, CreatedDate, IsPublished from CaseComments where IsPublished=true order by CreatedDate Desc)
+        FROM Case
+        WHERE Status IN ('New', 'Open', 'Assigned') and Owner.Name IN (
             'Amit Bhojak', 'Amit Kumar', 'Amith Gujjar', 'Aniket Chinde',
             'Aqsa Pandith', 'Becca Lozano', 'Chethan Kumara P', 'Ganesh Babu',
             'Gnanasiri Pechetti', 'Imari Killikelly', 'Infant Raj.', 'Ishaq Mathina', 
@@ -280,98 +200,71 @@ def fetch_cases():
 
 
 def convert_to_ist(date_string):
-    """
-    Converts a UTC datetime string from Salesforce to IST (Indian Standard Time) string.
-    Format: "dd-Mon HH:MM"
-    """
     if not date_string or date_string == "N/A":
         return "N/A"
-
     try:
-        # Handle both formats: with/without milliseconds, with Z or +0000
         date_string = date_string.replace("Z", "+0000")
         if "." in date_string:
-            # Has milliseconds
             utc_time = datetime.strptime(date_string, "%Y-%m-%dT%H:%M:%S.%f%z")
         else:
             utc_time = datetime.strptime(date_string, "%Y-%m-%dT%H:%M:%S%z")
-        
         ist = pytz.timezone("Asia/Kolkata")
         ist_time = utc_time.astimezone(ist)
         return ist_time.strftime("%d-%b %H:%M")
     except Exception as e:
-        print(f"Date conversion error: {e}")
-        return date_string  # Fallback to original string
+        return date_string
 
 
 def calculate_sla_deadline(last_customer_comment_time, sla_hours_duration):
-    """
-    Calculates the SLA deadline timestamp based on last customer comment time + SLA hours.
-    Returns formatted IST string or "N/A" if calculation not possible.
-    """
     if not last_customer_comment_time or last_customer_comment_time == "N/A" or not sla_hours_duration:
         return "N/A"
-    
     try:
-        # Parse the IST formatted time back to datetime
-        # Format: "dd-Mon HH:MM" - assume current year for parsing
         current_year = datetime.now().year
         dt = datetime.strptime(f"{current_year}-{last_customer_comment_time}", "%Y-%d-%b %H:%M")
-        
-        # Add SLA hours
         deadline = dt + timedelta(hours=sla_hours_duration)
-        
-        # Format back to IST string
         return deadline.strftime("%d-%b %H:%M")
     except:
         return "N/A"
 
 def calculate_sla_variance(deadline_str):
-    """
-    Calculates the difference between the SLA Deadline and Current IST Time.
-    Returns a formatted string indicating time remaining or time overdue.
-    """
     if not deadline_str or deadline_str == "N/A":
         return "N/A"
-        
     try:
-        # 1. Get current time in IST
         ist = pytz.timezone("Asia/Kolkata")
         now_ist = datetime.now(ist)
-        
-        # 2. Parse the deadline string ("dd-Mon HH:MM") back to a timezone-aware datetime
-        # We use the current year as a safe assumption based on your existing logic
         deadline_dt = datetime.strptime(f"{now_ist.year}-{deadline_str}", "%Y-%d-%b %H:%M")
         deadline_dt = ist.localize(deadline_dt)
-        
-        # 3. Calculate the time difference (Deadline - Current Time)
         diff = deadline_dt - now_ist
         total_minutes = int(diff.total_seconds() / 60)
-        
-        # 4. Format the output based on whether it is positive or negative
         if total_minutes < 0:
             hours, mins = divmod(abs(total_minutes), 60)
             return f"🚨 Overdue: {hours}h {mins}m"
         else:
             hours, mins = divmod(total_minutes, 60)
             return f"⏳ Due in: {hours}h {mins}m"
-            
     except Exception as e:
-        print(f"Variance calculation error: {e}")
-        return deadline_str  # Fallback to the absolute time string if parsing fails
+        return deadline_str
+
+# 👇 NEW HELPER FUNCTION FOR FILTERING
+def get_sla_status_category(sla_response_time_str):
+    """
+    Categorizes the SLA status string into 'Overdue', 'Due In' for filtering.
+    """
+
+    
+    sla_str = str(sla_response_time_str).lower()
+    
+    if "overdue" in sla_str:
+        return "Overdue"
+    elif "due in" in sla_str:
+        return "Due In"
+
 
 
 def get_processed_data():
-    """
-    Main data processing function.
-    1. Fetches raw cases from Salesforce.
-    2. Iterates through each case to calculate scores, SLAs, and extract comment info.
-    3. Returns a clean Pandas DataFrame ready for display.
-    """
     with st.spinner("Fetching Salesforce Cases..."):
         cases = fetch_cases()
 
-    # Initialize session state for storing AI sentiments so we don't re-analyze every rerun
     if "sentiments" not in st.session_state:
         st.session_state.sentiments = {}
 
@@ -381,15 +274,10 @@ def get_processed_data():
         if case is None:
             continue
 
-        # Extract basic fields
         owner_name = (case.get("Owner") or {}).get("Name", "UNKNOWN")
         customer_name = (case.get("Account") or {}).get("Name", "N/A")
         support_level = (case.get("Support_Level__c") or "N/A")
 
-        # ---------------------------
-        # Xactly account override logic
-        # ---------------------------
-        # Special handling for 'Xactly' accounts to fetch correct support level from related cases
         project_id = case.get("AccountName__c")
         if (customer_name != "N/A" and "Xactly" in customer_name and project_id):
             try:
@@ -403,13 +291,9 @@ def get_processed_data():
         sevone = (case.get("SEVONE__c"))
         escalated = (case.get("IsEscalated") or False)
 
-        # Calculate Priority Score
         case_score = calculate_score(sevone, severity, support_level, escalated)  
-        
-        # Get SLA Hours duration
         sla_hours_duration = get_sla_hours(severity, support_level)      
 
-        # Determine Last Commenter and Last Customer Comment Time
         last_commenter = "Internal Comment"
         last_customer_comment_time = "N/A"
 
@@ -418,43 +302,29 @@ def get_processed_data():
         if comments:
             latest = comments[0]
             created_by = (latest.get("CreatedBy") or {}).get("Name", "")
-
-            # Check if the latest comment was by an internal support agent
             if created_by in OWNER_REGION_MAP:
                 last_commenter = "Support Comment"
             else:
                 last_commenter = "Customer Comment"
 
-            # Find the most recent comment specifically from the Customer
             for comment in comments:
                 comment_user = (comment.get("CreatedBy") or {}).get("Name", "")
-                if comment_user == 'Customer Support User':  # Assuming 'Customer Support User' is the name for external customers in SF
+                if comment_user == 'Customer Support User':
                     last_customer_comment_time = convert_to_ist(comment.get("CreatedDate") or "N/A")
                     break
         
-        # Calculate SLA Deadline Timestamp based on last customer comment
         sla_deadline_time = calculate_sla_deadline(last_customer_comment_time, sla_hours_duration)
         
-        # 👇 FALLBACK: If SLA deadline is N/A, use case CreatedDate in IST
+        # Fallback: If no customer comment, calculate deadline using the creation date
         if sla_deadline_time == "N/A" or not sla_deadline_time:
             case_created_date = case.get("CreatedDate")
-            sla_deadline_time = convert_to_ist(case_created_date) if case_created_date else "N/A"
+            created_ist_str = convert_to_ist(case_created_date) if case_created_date else "N/A"
+            # Add the SLA hours to the creation date to get the true deadline
+            sla_deadline_time = calculate_sla_deadline(created_ist_str, sla_hours_duration)
+            
+        # Calculate the variance for ALL cases, regardless of which path was taken
+        relative_sla_time = calculate_sla_variance(sla_deadline_time)
 
-        # Calculate SLA Deadline Timestamp based on last customer comment
-        sla_deadline_time = calculate_sla_deadline(last_customer_comment_time, sla_hours_duration)
-        
-        # 👇 FALLBACK: If SLA deadline is N/A, use case CreatedDate in IST
-        if sla_deadline_time == "N/A" or not sla_deadline_time:
-            case_created_date = case.get("CreatedDate")
-            sla_deadline_time = convert_to_ist(case_created_date) if case_created_date else "N/A"
-
-        # 👇 NEW: Calculate the relative time variance
-        if last_commenter == "Support Comment":
-            relative_sla_time = "✅ No SLA to meet"
-        else:
-            relative_sla_time = calculate_sla_variance(sla_deadline_time)
-
-        # Append processed row to list
         dashboard.append({
             "Region": OWNER_REGION_MAP.get(owner_name, "UNKNOWN"),
             "Case Number": case.get("CaseNumber", "N/A"),
@@ -476,52 +346,111 @@ def get_processed_data():
 
 def apply_filters_and_ranking(df):
     """
-    Renders the Filter UI (Region and Owner multiselects) and applies them to the DataFrame.
-    Also calculates the 'Sequential_Rank' for each case within an Owner's list.
+    Renders the Filter UI (Region, Owner, SLA Status) and applies them to the DataFrame.
     """
-    c1, c2 = st.columns(2)
+    # Create 3 columns for filters
+    c1, c2, c3 = st.columns([1, 1, 1])
 
+    # ---------------------------------------------------
+    # 1. REGION FILTER
+    # ---------------------------------------------------
     with c1:
-        # 👇 NEW: Get ALL possible regions from the map, not just ones with active cases
         all_regions = sorted(list(set(OWNER_REGION_MAP.values())))
-        selected_regions = st.multiselect(":earth_africa: Region", all_regions, default=[])
-
-    # Logic to handle empty state gracefully
-    if selected_regions:
-        temp_df = df[df["Region"].isin(selected_regions)]
+        region_options = ["ALL"] + all_regions
         
-        # 👇 NEW: Get ALL possible owners for the selected regions from the map,
-        # regardless of whether they actually have cases in the DataFrame right now.
+        default_region = ["ALL"]
+        if "selected_regions" in st.session_state:
+             default_region = st.session_state.selected_regions
+             
+        selected_regions = st.multiselect(":earth_africa: Region", region_options, default=default_region, key="region_filter")
+        st.session_state.selected_regions = selected_regions
+
+    if "ALL" in selected_regions:
+        active_regions = all_regions
+    else:
+        active_regions = selected_regions
+
+    if active_regions:
+        temp_df = df[df["Region"].isin(active_regions)]
         available_owners = sorted([
             owner for owner, region in OWNER_REGION_MAP.items() 
-            if region in selected_regions
+            if region in active_regions
         ])
     else:
-        temp_df = df.iloc[:0]  # Empty DF but keeps all columns/schema
+        temp_df = df.iloc[:0]
         available_owners = []
+        
+    # ---------------------------------------------------
+    # 2. OWNER FILTER
+    # ---------------------------------------------------
     with c2:
-            selected_owners = st.multiselect(":bust_in_silhouette: Owner", available_owners, default=[])
+        current_selected_owners = []
+        if "selected_owners" in st.session_state:
+            current_selected_owners = st.session_state.selected_owners
 
-        # 👇 NEW: Figure out exactly which owners the user wants to see
-        # If they picked specific owners, use those. If they left it blank, use all available in the selected region.
+        invalid_owners = [owner for owner in current_selected_owners if owner not in available_owners]
+
+        if invalid_owners:
+            if "selected_owners" in st.session_state:
+                del st.session_state.selected_owners
+            st.rerun()
+
+        selected_owners = st.multiselect(
+            ":bust_in_silhouette: Owner", 
+            available_owners, 
+            default=current_selected_owners if not invalid_owners else [],
+            key="owner_filter"
+        )
+        st.session_state.selected_owners = selected_owners
+
+    # ---------------------------------------------------
+    # 3. SLA STATUS FILTER (NEW)
+    # ---------------------------------------------------
+    with c3:
+        # Define the possible categories
+        sla_categories = ["Overdue", "Due In"]
+        
+        # Default to showing all statuses
+        default_sla = ["Overdue", "Due In"]
+        if "selected_sla_status" in st.session_state:
+            default_sla = st.session_state.selected_sla_status
+            
+        selected_sla_status = st.multiselect(
+            ":hourglass_flowing_sand: SLA Prioritization", 
+            sla_categories, 
+            default=default_sla,
+            key="sla_filter"
+        )
+        st.session_state.selected_sla_status = selected_sla_status
+
+    # ---------------------------------------------------
+    # APPLY ALL FILTERS
+    # ---------------------------------------------------
+    
     active_owner_filter = selected_owners if selected_owners else available_owners
 
-        # If no region selected, return empty DF and empty owner list
-    if not selected_regions:
-            return temp_df, []
+    if not active_regions:
+        return temp_df, []
 
-        # Apply Owner filter if selected
+    # Apply Owner filter
     if selected_owners:
-            filtered_df = temp_df[temp_df["Case Owner"].isin(selected_owners)]
+        filtered_df = temp_df[temp_df["Case Owner"].isin(selected_owners)]
     else:
-            filtered_df = temp_df
+        filtered_df = temp_df
 
-        # Sort and Rank
+    # Apply SLA Status Filter
+    if selected_sla_status:
+        # Create a temporary column for filtering logic
+        filtered_df['SLA_Category'] = filtered_df['SLA Response Time'].apply(get_sla_status_category)
+        filtered_df = filtered_df[filtered_df['SLA_Category'].isin(selected_sla_status)]
+        # Drop the helper column so it doesn't appear in the table
+        filtered_df = filtered_df.drop(columns=['SLA_Category'])
+
+    # Sort and Rank
     if not filtered_df.empty:
-            filtered_df = filtered_df.sort_values(by=["Case Owner", "Case Score"], ascending=[True, False])
-            filtered_df["Sequential_Rank"] = filtered_df.groupby("Case Owner").cumcount() + 1
+        filtered_df = filtered_df.sort_values(by=["Case Owner", "Case Score"], ascending=[True, False])
+        filtered_df["Sequential_Rank"] = filtered_df.groupby("Case Owner").cumcount() + 1
 
-        # 👇 NEW: Return both the DataFrame AND the list of active owners
     return filtered_df, active_owner_filter
 
 # ---------------------------------------------------
@@ -530,41 +459,61 @@ def apply_filters_and_ranking(df):
 
 def render_table(filtered_df, cases, openai_service):
     """
-    Renders the custom HTML/CSS table.
-    Includes buttons for AI Sentiment Analysis.
+    Renders the custom HTML/CSS table with sortable headers.
     """
     st.subheader(":clipboard: AI Case Monitoring")
     
-    # Show a clean message when no filters are selected
+    if "sort_column" not in st.session_state:
+        st.session_state.sort_column = None
+    if "sort_asc" not in st.session_state:
+        st.session_state.sort_asc = True
 
-    # Container with fixed height to match the chart on the right
     report_box = st.container(height=350)
 
     with report_box:
-        # Define column widths for the table header and rows
-        # These ratios determine how much space each column takes
         col_widths = [1, 1.2, 2.8, 3.0, 2, 1.0, 1.0, 1.2, 1.5, 2.5, 2.0, 2.2, 0.8]
         
-        # Render Header Row
-        headers = st.columns(col_widths)
-        headers[0].write("**Region**")
-        headers[1].write("**Case**")
-        headers[2].write("**Customer**")
-        headers[3].write("**Owner**")
-        headers[4].write("**Support Level**")
-        headers[5].write("**Severity**")
-        headers[6].write("**Status**")
-        headers[7].write("**Escalated**")
-        headers[8].write("**Sentiment**")
-        headers[9].write("**Last Comment**")
-        headers[10].write("**LCC Time**")
-        headers[11].write("**SLA Deadline**")  # Shows SLA deadline or CreatedDate as fallback
-        headers[12].write("**Rank**")
-
-        st.markdown("---")  # Horizontal line separator
+        col_mapping = {
+            "Region": "Region",
+            "Case": "Case Number",
+            "Customer": "Customer Name",
+            "Owner": "Case Owner",
+            "Support Level": "Support Level",
+            "Severity": "Severity",
+            "Status": "Status",
+            "Escalated": "Escalated",
+            "Sentiment": "Sentiment",
+            "Last Comment": "Last Comment By",
+            "LCC Time": "Last Customer Comment",
+            "SLA Deadline": "SLA Response Time",
+            "Rank": "Sequential_Rank"
+        }
         
-        # Render Data Rows
-        for index, row in filtered_df.iterrows():
+        headers = st.columns(col_widths)
+        
+        for i, (display_name, df_col) in enumerate(col_mapping.items()):
+            icon = ""
+            if st.session_state.sort_column == df_col:
+                icon = " ▲" if st.session_state.sort_asc else " ▼"
+            
+            if headers[i].button(f"{display_name}{icon}", key=f"sort_{df_col}", help=f"Sort by {display_name}"):
+                if st.session_state.sort_column == df_col:
+                    st.session_state.sort_asc = not st.session_state.sort_asc
+                else:
+                    st.session_state.sort_column = df_col
+                    st.session_state.sort_asc = True
+                st.rerun()
+
+        st.markdown("---")
+        
+        display_df = filtered_df.copy()
+        if st.session_state.sort_column and st.session_state.sort_column in display_df.columns:
+            display_df = display_df.sort_values(
+                by=st.session_state.sort_column, 
+                ascending=st.session_state.sort_asc
+            )
+        
+        for index, row in display_df.iterrows():
             cols = st.columns(col_widths)
             cols[0].write(row["Region"])
             cols[1].write(row["Case Number"])
@@ -575,17 +524,12 @@ def render_table(filtered_df, cases, openai_service):
             cols[6].write(row["Status"])
             cols[7].write("Yes" if row["Escalated"] else "No")
 
-            # --- Sentiment Analysis Logic ---
             sentiment = row["Sentiment"]
             if sentiment == "Not Analyzed":
-                # Show 'Analyze' button if not yet analyzed
                 if cols[8].button(":brain: Analyze", key=f"analyze_{row['Case Number']}"):
                     with st.spinner(f"Analyzing {row['Case Number']}..."):
-                        # Find the raw case data for the prompt
                         matching_case = next(c for c in cases if c["CaseNumber"] == row["Case Number"])
                         client = openai_service.get_connection()
-                        
-                        # Construct Prompt for OpenAI
                         prompt = f"""
                             Analyze this Salesforce support case.
                             Case Number: {matching_case.get("CaseNumber")}
@@ -595,19 +539,15 @@ def render_table(filtered_df, cases, openai_service):
                             Escalated: {matching_case.get("IsEscalated")}
                             Return ONLY one word: Positive, Neutral, Negative, or Critical.
                         """
-                        # Call OpenAI API
                         response = client.chat.completions.create(
                             model="gpt-4o-mini",
                             messages=[{"role": "user", "content": prompt}],
                             temperature=0
                         )
                         sentiment = response.choices[0].message.content.strip()
-                        
-                        # Save to session state to persist across reruns
                         st.session_state.sentiments[row["Case Number"]] = sentiment
-                        st.rerun()  # Rerun to update the UI with the new sentiment
+                        st.rerun()
             else:
-                # Display Sentiment with color coding
                 sentiment_lower = sentiment.lower()
                 if "positive" in sentiment_lower:
                     cols[8].success(sentiment) 
@@ -620,11 +560,7 @@ def render_table(filtered_df, cases, openai_service):
 
             cols[9].write(row["Last Comment By"])
             cols[10].write(row["Last Customer Comment"])
-            
-            # SLA Column - Shows deadline or fallback to CreatedDate
             cols[11].write(row["SLA Response Time"])
-            
-            # Rank Column - Styled with white color for visibility
             cols[12].markdown(f"<div style='color: #FFFFFF; font-weight: 600; font-size: 14px;'>{row['Sequential_Rank']}</div>", unsafe_allow_html=True)
 
 
@@ -637,19 +573,15 @@ def main():
     
     st.title("🎯 Support Case Dashboard")
     
-    # Initialize OpenAI service if needed for sentiment analysis
     from services.openai_service import OpenAIService
     openai_service = OpenAIService()
     
-    # Fetch and process data
     df, raw_cases = get_processed_data()
-    
-    # Apply filters and ranking
-    filtered_df = apply_filters_and_ranking(df)
-    
-    # Render the table
+    filtered_df, active_owners = apply_filters_and_ranking(df)
     render_table(filtered_df, raw_cases, openai_service)
 
 
 if __name__ == "__main__":
     main()
+
+
