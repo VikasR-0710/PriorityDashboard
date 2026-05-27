@@ -83,6 +83,9 @@ OWNER_REGION_MAP = {
     "Imari Killikelly": "P+",
     "Merlyn Pushparaj": "P+",
     "Naveen Kumar Surisetti": "P+",
+
+    #internal
+    "Xactly Support Agent": "#Agent"
 }
 
 def inject_custom_css():
@@ -228,7 +231,7 @@ def calculate_sla_deadline(last_customer_comment_time, sla_hours_duration):
 
 def calculate_sla_variance(deadline_str):
     if not deadline_str or deadline_str == "N/A":
-        return "N/A"
+        return "N/A", float('inf')
     try:
         ist = pytz.timezone("Asia/Kolkata")
         now_ist = datetime.now(ist)
@@ -236,28 +239,32 @@ def calculate_sla_variance(deadline_str):
         deadline_dt = ist.localize(deadline_dt)
         diff = deadline_dt - now_ist
         total_minutes = int(diff.total_seconds() / 60)
-        if total_minutes < 0:
-            hours, mins = divmod(abs(total_minutes), 60)
-            return f"🚨 Overdue: {hours}h {mins}m"
+        
+        # 1. Calculate Days, Hours, and Minutes
+        is_overdue = total_minutes < 0
+        abs_mins = abs(total_minutes)
+        
+        days, remainder = divmod(abs_mins, 1440)  # 1440 minutes = 1 day
+        hours, mins = divmod(remainder, 60)
+        
+        # 2. Build the formatted string dynamically
+        time_parts = []
+        if days > 0:
+            time_parts.append(f"{days}d")
+        if hours > 0 or days > 0: # Ensure hours show up if there are days
+            time_parts.append(f"{hours}h")
+        time_parts.append(f"{mins}m")
+        
+        formatted_time = " ".join(time_parts)
+        
+        # 3. Return BOTH the string (for display) and raw minutes (for sorting)
+        if is_overdue:
+            return f"🚨 Overdue: {formatted_time}", total_minutes
         else:
-            hours, mins = divmod(total_minutes, 60)
-            return f"⏳ Due in: {hours}h {mins}m"
+            return f"⏳ Due in: {formatted_time}", total_minutes
+            
     except Exception as e:
-        return deadline_str
-
-# 👇 NEW HELPER FUNCTION FOR FILTERING
-def get_sla_status_category(sla_response_time_str):
-    """
-    Categorizes the SLA status string into 'Overdue', 'Due In' for filtering.
-    """
-
-    
-    sla_str = str(sla_response_time_str).lower()
-    
-    if "overdue" in sla_str:
-        return "Overdue"
-    elif "due in" in sla_str:
-        return "Due In"
+        return deadline_str, float('inf')
 
 
 
@@ -314,17 +321,16 @@ def get_processed_data():
                     break
         
         sla_deadline_time = calculate_sla_deadline(last_customer_comment_time, sla_hours_duration)
-        
-        # Fallback: If no customer comment, calculate deadline using the creation date
+                
+                # Fallback: If no customer comment, calculate deadline using the creation date
         if sla_deadline_time == "N/A" or not sla_deadline_time:
             case_created_date = case.get("CreatedDate")
             created_ist_str = convert_to_ist(case_created_date) if case_created_date else "N/A"
             # Add the SLA hours to the creation date to get the true deadline
             sla_deadline_time = calculate_sla_deadline(created_ist_str, sla_hours_duration)
-            
-        # Calculate the variance for ALL cases, regardless of which path was taken
-        relative_sla_time = calculate_sla_variance(sla_deadline_time)
-
+                    
+                # 👇 UPDATE THIS LINE: Make sure you unpack both variables (relative_sla_time AND sla_minutes)
+        relative_sla_time, sla_minutes = calculate_sla_variance(sla_deadline_time)
         dashboard.append({
             "Region": OWNER_REGION_MAP.get(owner_name, "UNKNOWN"),
             "Case Number": case.get("CaseNumber", "N/A"),
@@ -338,56 +344,37 @@ def get_processed_data():
             "Sentiment": st.session_state.sentiments.get(case.get("CaseNumber"), "Not Analyzed"),
             "Case Score": case_score,
             "Last Customer Comment": last_customer_comment_time,
-            "SLA Response Time": relative_sla_time
+            "SLA Response Time": relative_sla_time,
+            "SLA_Minutes": sla_minutes
         })
 
     return pd.DataFrame(dashboard), cases
 
 
 def apply_filters_and_ranking(df):
-    """
-    Renders the Filter UI (Region, Owner, SLA Status) and applies them to the DataFrame.
-    """
-    # Create 3 columns for filters
     c1, c2, c3 = st.columns([1, 1, 1])
 
-    # ---------------------------------------------------
     # 1. REGION FILTER
-    # ---------------------------------------------------
     with c1:
         all_regions = sorted(list(set(OWNER_REGION_MAP.values())))
         region_options = ["ALL"] + all_regions
         
-        default_region = ["ALL"]
-        if "selected_regions" in st.session_state:
-             default_region = st.session_state.selected_regions
-             
+        default_region = st.session_state.get("selected_regions", ["ALL"])
         selected_regions = st.multiselect(":earth_africa: Region", region_options, default=default_region, key="region_filter")
         st.session_state.selected_regions = selected_regions
 
-    if "ALL" in selected_regions:
-        active_regions = all_regions
-    else:
-        active_regions = selected_regions
+    active_regions = all_regions if "ALL" in selected_regions else selected_regions
 
     if active_regions:
         temp_df = df[df["Region"].isin(active_regions)]
-        available_owners = sorted([
-            owner for owner, region in OWNER_REGION_MAP.items() 
-            if region in active_regions
-        ])
+        available_owners = sorted([owner for owner, region in OWNER_REGION_MAP.items() if region in active_regions])
     else:
         temp_df = df.iloc[:0]
         available_owners = []
         
-    # ---------------------------------------------------
     # 2. OWNER FILTER
-    # ---------------------------------------------------
     with c2:
-        current_selected_owners = []
-        if "selected_owners" in st.session_state:
-            current_selected_owners = st.session_state.selected_owners
-
+        current_selected_owners = st.session_state.get("selected_owners", [])
         invalid_owners = [owner for owner in current_selected_owners if owner not in available_owners]
 
         if invalid_owners:
@@ -403,17 +390,10 @@ def apply_filters_and_ranking(df):
         )
         st.session_state.selected_owners = selected_owners
 
-    # ---------------------------------------------------
-    # 3. SLA STATUS FILTER (NEW)
-    # ---------------------------------------------------
+    # 3. SLA STATUS FILTER (UPDATED)
     with c3:
-        # Define the possible categories
-        sla_categories = ["Overdue", "Due In"]
-        
-        # Default to showing all statuses
-        default_sla = ["Overdue", "Due In"]
-        if "selected_sla_status" in st.session_state:
-            default_sla = st.session_state.selected_sla_status
+        sla_categories = ["Need Immediate Attention", "Need Secondary Attention"]
+        default_sla = st.session_state.get("selected_sla_status", [])
             
         selected_sla_status = st.multiselect(
             ":hourglass_flowing_sand: SLA Prioritization", 
@@ -423,33 +403,40 @@ def apply_filters_and_ranking(df):
         )
         st.session_state.selected_sla_status = selected_sla_status
 
-    # ---------------------------------------------------
-    # APPLY ALL FILTERS
-    # ---------------------------------------------------
-    
+    # APPLY FILTERS
     active_owner_filter = selected_owners if selected_owners else available_owners
 
     if not active_regions:
         return temp_df, []
 
-    # Apply Owner filter
     if selected_owners:
         filtered_df = temp_df[temp_df["Case Owner"].isin(selected_owners)]
     else:
         filtered_df = temp_df
 
-    # Apply SLA Status Filter
+    # Apply Prioritization Logic
     if selected_sla_status:
-        # Create a temporary column for filtering logic
-        filtered_df['SLA_Category'] = filtered_df['SLA Response Time'].apply(get_sla_status_category)
-        filtered_df = filtered_df[filtered_df['SLA_Category'].isin(selected_sla_status)]
-        # Drop the helper column so it doesn't appear in the table
-        filtered_df = filtered_df.drop(columns=['SLA_Category'])
-
-    # Sort and Rank
-    if not filtered_df.empty:
-        filtered_df = filtered_df.sort_values(by=["Case Owner", "Case Score"], ascending=[True, False])
-        filtered_df["Sequential_Rank"] = filtered_df.groupby("Case Owner").cumcount() + 1
+        # Sort ascending: most overdue (negative mins) first, then closest due (positive mins)
+        filtered_df = filtered_df.sort_values(by="SLA_Minutes", ascending=True)
+        
+        # Create a boolean mask to filter exactly 25 or 50 rows based on selection
+        mask = pd.Series(False, index=filtered_df.index)
+        
+        if "Need Immediate Attention" in selected_sla_status:
+            mask.loc[filtered_df.head(25).index] = True
+            
+        if "Need Secondary Attention" in selected_sla_status:
+            mask.loc[filtered_df.iloc[25:50].index] = True
+            
+        filtered_df = filtered_df[mask]
+        
+        # Adjust rank dynamically for the filtered view
+        filtered_df["Sequential_Rank"] = range(1, len(filtered_df) + 1)
+    else:
+        # Default behavior if SLA filter is not applied
+        if not filtered_df.empty:
+            filtered_df = filtered_df.sort_values(by=["Case Owner", "Case Score"], ascending=[True, False])
+            filtered_df["Sequential_Rank"] = filtered_df.groupby("Case Owner").cumcount() + 1
 
     return filtered_df, active_owner_filter
 
@@ -513,6 +500,18 @@ def render_table(filtered_df, cases, openai_service):
                 ascending=st.session_state.sort_asc
             )
         
+        display_df = filtered_df.copy()
+        if st.session_state.sort_column and st.session_state.sort_column in display_df.columns:
+            
+            # Map visual column to numeric column if sorting SLA
+            sort_target = st.session_state.sort_column
+            if sort_target == "SLA Response Time":
+                sort_target = "SLA_Minutes"
+                
+            display_df = display_df.sort_values(
+                by=sort_target, 
+                ascending=st.session_state.sort_asc
+            )
         for index, row in display_df.iterrows():
             cols = st.columns(col_widths)
             cols[0].write(row["Region"])
