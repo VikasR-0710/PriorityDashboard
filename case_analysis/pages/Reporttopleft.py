@@ -176,7 +176,7 @@ def fetch_cases():
         SELECT
             Id, CaseNumber, Subject, Status, Owner.Name, Account.Name, AccountName__c,
             Support_Level__c, Severity__c, Sevone__c, IsEscalated, CreatedDate, ClosedDate,
-            (select CreatedBy.Name, CreatedDate, IsPublished from CaseComments where IsPublished=true order by CreatedDate Desc)
+            (select CommentBody, CreatedBy.Name, CreatedDate, IsPublished from CaseComments where IsPublished=true order by CreatedDate Desc)
         FROM Case
         WHERE Status IN ('New', 'Open', 'Assigned') and Owner.Name IN (
             'Amit Bhojak', 'Amit Kumar', 'Amith Gujjar', 'Aniket Chinde',
@@ -469,6 +469,14 @@ def render_table(filtered_df, cases, openai_service):
                 if cols[8].button(":brain: Analyze", key=f"analyze_{row['Case Number']}"):
                     with st.spinner(f"Analyzing {row['Case Number']}..."):
                         matching_case = next(c for c in cases if c["CaseNumber"] == row["Case Number"])
+                        
+                        # Extract recent case comments for context
+                        comments_records = (matching_case.get("CaseComments") or {}).get("records", [])
+                        comments_text = " | ".join([
+                            f"{c.get('CreatedBy', {}).get('Name', 'Unknown')}: {c.get('CommentBody', '')}"
+                            for c in comments_records[:10]  # Limit to last 5 to manage token count
+                        ]) or "No published comments available."
+
                         client = openai_service.get_connection()
                         prompt = f"""
                             Analyze this Salesforce support case.
@@ -477,6 +485,7 @@ def render_table(filtered_df, cases, openai_service):
                             Status: {matching_case.get("Status")}
                             Customer: {(matching_case.get("Account") or {}).get("Name","")}
                             Escalated: {matching_case.get("IsEscalated")}
+                            Recent Comments: {comments_text}
                             Return ONLY one word: Positive, Neutral, Negative, or Critical.
                         """
                         response = client.chat.completions.create(
