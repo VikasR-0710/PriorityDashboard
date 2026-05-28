@@ -259,6 +259,34 @@ def calculate_sla_variance(deadline_str):
     except Exception:
         return deadline_str, float('inf')
 
+# ---------------------------------------------------
+# NEW: SLA BREACH SHIFT HELPER
+# ---------------------------------------------------
+def get_breach_shift(deadline_str, sla_minutes):
+    """Returns the shift during which SLA was breached (only if overdue)."""
+    if not deadline_str or deadline_str == "N/A" or sla_minutes >= 0:
+        return "N/A"
+    try:
+        current_year = datetime.now().year
+        ist = pytz.timezone("Asia/Kolkata")
+        dt = datetime.strptime(f"{current_year}-{deadline_str}", "%Y-%d-%b %H:%M")
+        dt_aware = ist.localize(dt)
+        h = dt_aware.hour
+        if 6 <= h < 14:
+            return "APAC"
+        elif 14 <= h < 20:
+            return "EMEA"
+        elif h >= 20 or h < 2:
+            return "NA EAST"
+        elif 2 <= h < 6:
+            return "NA WEST"
+        return "N/A"
+    except Exception:
+        return "N/A"
+
+# ---------------------------------------------------
+# DATA PROCESSING
+# ---------------------------------------------------
 def get_processed_data():
     with st.spinner("Fetching Salesforce Cases..."):
         cases = fetch_cases()
@@ -321,6 +349,10 @@ def get_processed_data():
             sla_deadline_time = calculate_sla_deadline(created_ist_str, sla_hours_duration, support_level)
                     
         relative_sla_time, sla_minutes = calculate_sla_variance(sla_deadline_time)
+        
+        # NEW: Calculate breach shift
+        sla_breach_shift = get_breach_shift(sla_deadline_time, sla_minutes)
+                
         dashboard.append({
             "Region": OWNER_REGION_MAP.get(owner_name, "UNKNOWN"),
             "Case Number": case.get("CaseNumber", "N/A"),
@@ -335,7 +367,8 @@ def get_processed_data():
             "Case Score": case_score,
             "Last Customer Comment": last_customer_comment_time,
             "SLA Response Time": relative_sla_time,
-            "SLA_Minutes": sla_minutes
+            "SLA_Minutes": sla_minutes,
+            "SLA_Breach_Shift": sla_breach_shift
         })
 
     return pd.DataFrame(dashboard), cases
@@ -422,13 +455,14 @@ def render_table(filtered_df, cases, openai_service):
     report_box = st.container(height=350)
 
     with report_box:
-        col_widths = [1, 1.2, 2.8, 3.0, 2, 1.0, 1.0, 1.2, 1.5, 2.5, 2.0, 2.2, 0.8]
+        col_widths = [0.8, 1.0, 2.5, 2.0, 1.8, 0.8, 1.0, 0.8, 1.3, 2.0, 1.8, 2.0, 2.0, 0.6]
         col_mapping = {
             "Region": "Region", "Case": "Case Number", "Customer": "Customer Name",
             "Owner": "Case Owner", "Support Level": "Support Level", "Severity": "Severity",
             "Status": "Status", "Escalated": "Escalated", "Sentiment": "Sentiment",
             "Last Comment": "Last Comment By", "LCC Time": "Last Customer Comment",
-            "SLA Deadline": "SLA Response Time", "Rank": "Sequential_Rank"
+            "SLA Deadline": "SLA Response Time", "SLA Breach Shift": "SLA_Breach_Shift",
+            "Rank": "Sequential_Rank"
         }
         
         headers = st.columns(col_widths)
@@ -510,7 +544,8 @@ def render_table(filtered_df, cases, openai_service):
             cols[9].write(row["Last Comment By"])
             cols[10].write(row["Last Customer Comment"])
             cols[11].write(row["SLA Response Time"])
-            cols[12].markdown(f"<div style='color: #FFFFFF; font-weight: 600; font-size: 14px;'>{row['Sequential_Rank']}</div>", unsafe_allow_html=True)
+            cols[12].write(row["SLA_Breach_Shift"])
+            cols[13].markdown(f"<div style='color: #FFFFFF; font-weight: 600; font-size: 14px;'>{row['Sequential_Rank']}</div>", unsafe_allow_html=True)
 
 def main():
     inject_custom_css()

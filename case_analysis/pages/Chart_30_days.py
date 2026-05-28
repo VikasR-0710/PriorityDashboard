@@ -140,9 +140,9 @@ def get_closed_cases_data():
 
 def render_30_day_chart(active_owners):
     """
-    Renders the Gauge Chart (30-Day Utilization Meter).
+    Renders the Gauge Chart (Utilization Meter).
     """
-    st.markdown("<h3 style='color: #F8FAFC; margin-top: 0; margin-bottom: 10px;'>📊 30-Day Utilization (Closed)</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 style='color: #F8FAFC; margin-top: 0; margin-bottom: 10px;'>📊 30-Day Utilization</h3>", unsafe_allow_html=True)
 
     # 1. Fetch the dedicated 30-day closed data
     # The cache handles the heavy lifting. If data is cached, this is instant.
