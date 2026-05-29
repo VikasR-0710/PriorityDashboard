@@ -1,0 +1,230 @@
+import sys
+import os
+# Add current directory to path to allow imports from subfolders
+sys.path.append(os.getcwd())
+
+import streamlit as st
+from case_analysis.services.openai_service import OpenAIService
+
+# Import specific functions from the page modules. 
+from case_analysis.pages.Reporttopleft import (
+    inject_custom_css, 
+    get_processed_data, 
+    apply_filters_and_ranking, 
+    render_table
+)
+from case_analysis.pages.Charttopright import render_chart
+from case_analysis.pages.Chart_30_days import render_30_day_chart
+
+
+# ---------------------------------------------------
+# 0. HELPER FUNCTIONS FOR REFRESH
+# ---------------------------------------------------
+def refresh_dashboard():
+    """
+    Clears ALL caches and session state to force a complete 
+    reload of data from sources (Salesforce, APIs, etc.)
+    """
+    # 1. Clear Streamlit Data Cache 
+    st.cache_data.clear()
+    
+    # 2. Clear Streamlit Resource Cache 
+    st.cache_resource.clear()
+    
+    # 3. Clear specific Session State keys related to UI filters/state
+    keys_to_clear = [
+        'filter_case_id', 
+        'filter_region', 
+        'filter_status',
+        'expanded_rows',
+        'selected_cases'
+    ]
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+    
+    # 4. Force a full script rerun
+    st.rerun()
+
+# ---------------------------------------------------
+# 1. PAGE LAYOUT CONFIG & STATE
+# ---------------------------------------------------
+st.set_page_config(
+    page_title="Prioritization Dashboard", 
+    page_icon="📊",
+    layout="wide", # Uses full browser width
+    initial_sidebar_state="collapsed" # Hides sidebar by default
+)
+
+# Initialize a session state variable for the dynamic accent color
+if 'accent_color' not in st.session_state:
+    st.session_state.accent_color = "#3B82F6"  # Default: Premium Corporate Blue
+
+# Toggle thematic styles professionally
+if st.button("🎨 Toggle Accent Theme (Blue / Slate)"):
+    if st.session_state.accent_color == "#3B82F6":
+        st.session_state.accent_color = "#64748B"  # Switch to Slate
+    else:
+        st.session_state.accent_color = "#3B82F6"  # Switch back to Blue
+
+# Inject existing custom CSS from your imports (handles sidebar hiding, etc.)
+inject_custom_css()
+
+# Inject Refined, Professional UI Styles
+st.markdown(
+    f"""
+    <style>
+    /* Modern Slate Dark Theme Base */
+    .stApp {{
+        background-color: #0F172A; /* Deep Slate/Navy Blue Black */
+        color: #F8FAFC; /* Crisp white/grey text for contrast */
+    }}
+    
+    /* Clean, professional horizontal dividers */
+    hr {{
+        border: 0;
+        height: 1px;
+        background: linear-gradient(to right, {st.session_state.accent_color}, transparent);
+        margin: 1.5rem 0;
+    }}
+    
+    /* Target ONLY top-level dashboard columns inside our main block */
+    .main-dashboard-row [data-testid="stColumn"] {{
+        background-color: #1E293B !important; 
+        padding: 1.5rem !important;
+        border-radius: 12px !important;
+        border: 1px solid #334155 !important;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }}
+
+    /* Reset styles for nested columns (inside the table/chart) */
+    .main-dashboard-row [data-testid="stColumn"] [data-testid="stColumn"] {{
+        background-color: transparent !important;
+        padding: 0px !important;
+        margin: 0px !important;
+        border: none !important;
+        box-shadow: none !important;
+    }}
+
+    /* --- INCREASE TABLE FONT SIZE --- */
+    .main-dashboard-row [data-testid="stColumn"]:first-child p,
+    .main-dashboard-row [data-testid="stColumn"]:first-child div[data-testid="stHorizontalBlock"] p {{
+        font-size: 14px !important; 
+        line-height: 1.4 !important;
+    }}
+    
+    /* Make headers bold and slightly larger */
+    .main-dashboard-row [data-testid="stColumn"]:first-child h1,
+    .main-dashboard-row [data-testid="stColumn"]:first-child h2,
+    .main-dashboard-row [data-testid="stColumn"]:first-child h3,
+    .main-dashboard-row [data-testid="stColumn"]:first-child h4 {{
+        font-size: 1.2rem !important;
+        color: #FFFFFF !important;
+    }}
+
+    /* Widget Labels styling */
+    label, label p, label span {{
+        color: #94A3B8 !important; 
+        font-weight: 500 !important;
+        font-size: 0.9rem !important;
+        letter-spacing: 0.5px;
+    }}
+
+    /* Premium Button overrides */
+    div[data-testid="stButton"] button {{
+        background-color: #1E293B !important;
+        border: 1px solid #334155 !important;
+        border-radius: 6px !important;
+        transition: all 0.2s ease-in-out;
+    }}
+    
+    div[data-testid="stButton"] button p {{
+        color: #E2E8F0 !important;
+        font-weight: 500 !important;
+    }}
+    
+    div[data-testid="stButton"] button:hover {{
+        border-color: {st.session_state.accent_color} !important;
+        box-shadow: 0 0 10px {st.session_state.accent_color}40; 
+    }}
+
+    /* Clean, Modern Corporate Title */
+    .dashboard-title {{
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+        color: #FFFFFF !important;
+        font-size: 2rem !important; 
+        font-weight: 700 !important;
+        letter-spacing: -0.5px !important;
+        margin-bottom: 4px !important;
+    }}
+    .dashboard-subtitle {{
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+        color: #94A3B8 !important;
+        font-size: 0.95rem !important;
+        margin-bottom: 20px !important;
+    }}
+    .accent-bar {{
+        height: 4px;
+        width: 60px;
+        background-color: {st.session_state.accent_color};
+        border-radius: 2px;
+        margin-bottom: 25px;
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# ---------------------------------------------------
+# 2. EXECUTIVE HEADER SECTION WITH REFRESH BUTTON
+# ---------------------------------------------------
+header_col1, header_col2 = st.columns([0.8, 0.2])
+
+with header_col1:
+    st.markdown('<div class="dashboard-title">GCS Prioritization and Utilization Dashboard</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="accent-bar"></div>', unsafe_allow_html=True)
+
+with header_col2:
+    if st.button("🔄 Refresh Dashboard", use_container_width=True, type="secondary"):
+        refresh_dashboard()
+
+# ---------------------------------------------------
+# 3. RUN EXTRACTIONS, FILTERS & SELECTION LOGIC
+# ---------------------------------------------------
+# df contains strictly active/open cases from Reporttopleft
+df, cases = get_processed_data()
+filtered_df, active_owners = apply_filters_and_ranking(df)
+
+# ---------------------------------------------------
+# 4. FULL WIDTH TABLE
+# ---------------------------------------------------
+st.markdown('<div class="main-dashboard-row">', unsafe_allow_html=True)
+
+# Render the detailed case table FULL WIDTH
+render_table(filtered_df, cases, OpenAIService())
+
+st.markdown('</div>', unsafe_allow_html=True)
+st.markdown("<br>", unsafe_allow_html=True) # Give a little breathing room
+
+# ---------------------------------------------------
+# 5. CHARTS ROW (MOVED DOWN)
+# ---------------------------------------------------
+st.markdown('<div class="main-dashboard-row">', unsafe_allow_html=True)
+
+chart_col1, chart_col2 = st.columns(2, gap="large")
+
+with chart_col1:
+    # Render active workload meter
+    render_chart(filtered_df)
+
+with chart_col2:
+    # Render 30-day meter (passes filtered_df just to sync selected UI filters)
+    render_30_day_chart(active_owners)
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------
+# 6. FOOTER
+# ---------------------------------------------------
+st.markdown("---")
+st.caption("🔄 Dashboard auto-refreshes every 1 Hour directly from Salesforce.")

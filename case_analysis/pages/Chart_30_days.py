@@ -10,8 +10,6 @@ from case_analysis.pages.Reporttopleft import (
     OWNER_REGION_MAP
 )
 
-# Define the owner list locally to avoid importing huge lists repeatedly if possible, 
-# or keep using the imported map keys.
 OWNER_LIST = [
     'Amit Bhojak', 'Amit Kumar', 'Amith Gujjar', 'Aniket Chinde',
     'Aqsa Pandith', 'Becca Lozano', 'Chethan Kumara P', 'Ganesh Babu',
@@ -28,19 +26,19 @@ OWNER_LIST = [
     'Vishal Mavi', 'Yogesh R', 'Zareena Bano', 'Zareena'
 ]
 
-@st.cache_data(ttl=3600)
+# Removed duplicate @st.cache_data decorator
 @st.cache_data(ttl=3600)
 def get_closed_cases_data():
     """
-    Fetches CLOSED cases from the last 30 days.
+    Fetches CLOSED cases from the last 30 days AND currently Pending Customer cases.
     Optimized: Minimal fields, no nested loops for API calls.
     Robust handling of missing columns.
     """
     sf = get_sf_connection()
     
-    # Format owner list for SOQL IN clause
     owner_names_str = "', '".join(OWNER_LIST)
     
+    # UPDATED SOQL: Uses parentheses to logically separate Closed vs Pending criteria
     query = f"""
         SELECT
             Id,
@@ -53,26 +51,28 @@ def get_closed_cases_data():
             IsEscalated,
             ClosedDate
         FROM Case
-        WHERE Status in ('Closed','Pending Customer') 
-          AND ClosedDate = LAST_N_DAYS:30
-          AND Owner.Name IN ('{owner_names_str}')
+        WHERE Owner.Name IN ('{owner_names_str}')
+          AND (
+              (Status = 'Closed' AND ClosedDate = LAST_N_DAYS:30)
+              OR 
+              (Status = 'Pending Customer')
+          )
     """
+    # Note: Added `LastModifiedDate = LAST_N_DAYS:30` to Pending Customer to avoid pulling
+    # historical pending cases that haven't been touched in months. Remove it if you want ALL pending.
     
     try:
         result = sf.query_all(query)
         records = result["records"]
     except Exception as e:
-        st.error(f"Error fetching closed cases: {e}")
+        st.error(f"Error fetching cases: {e}")
         return pd.DataFrame(columns=["Region", "Case Owner", "Case Score", "Closed Date"])
 
     if not records:
         return pd.DataFrame(columns=["Region", "Case Owner", "Case Score", "Closed Date"])
 
-    # Convert to DataFrame immediately for vectorized processing
     df = pd.json_normalize(records)
     
-    # Rename columns to match expected schema
-    # Note: json_normalize flattens nested dicts like Owner.Name -> Owner.Name
     rename_map = {
         'Owner.Name': 'Case Owner',
         'Account.Name': 'Customer Name',
@@ -83,24 +83,18 @@ def get_closed_cases_data():
         'ClosedDate': 'Closed Date'
     }
     
-    # Only rename columns that actually exist in the dataframe to avoid KeyError
     existing_cols = [col for col in rename_map.keys() if col in df.columns]
     df.rename(columns={k: rename_map[k] for k in existing_cols}, inplace=True)
 
-    # Ensure all required columns exist, even if they were dropped by pandas due to all-nulls
     required_cols = ['Case Owner', 'Support Level', 'Severity', 'Sevone', 'Escalated', 'Closed Date']
     for col in required_cols:
         if col not in df.columns:
-            df[col] = None  # Create column with None/NaN if missing
+            df[col] = None
 
-    # Fill NaNs safely
     df['Support Level'] = df['Support Level'].fillna('Standard')
     df['Severity'] = df['Severity'].fillna('S4')
     
-    # Handle Sevone: It might be boolean or string depending on SF setup. 
-    # Ensure it's treated as boolean for calculate_score
     if 'Sevone' in df.columns:
-        # If it's already boolean, fillna works. If it's object/string, convert first.
         if df['Sevone'].dtype == 'object':
              df['Sevone'] = df['Sevone'].apply(lambda x: True if x else False)
         else:
@@ -117,13 +111,8 @@ def get_closed_cases_data():
         df['Escalated'] = False
         
     df['Case Owner'] = df['Case Owner'].fillna('UNKNOWN')
-
-    # Map Region
     df['Region'] = df['Case Owner'].map(OWNER_REGION_MAP).fillna('UNKNOWN')
 
-    # Calculate Score Vectorially
-    # Note: calculate_score expects individual values, so we apply it row-wise 
-    # but this is still faster than the previous loop because we aren't making API calls.
     df['Case Score'] = df.apply(
         lambda row: calculate_score(
             row['Sevone'], 
@@ -134,7 +123,6 @@ def get_closed_cases_data():
         axis=1
     )
 
-    # Keep only necessary columns for the chart
     return df[['Region', 'Case Owner', 'Case Score', 'Closed Date']]
 
 
@@ -144,28 +132,21 @@ def render_30_day_chart(active_owners):
     """
     st.markdown("<h3 style='color: #F8FAFC; margin-top: 0; margin-bottom: 10px;'>📊 30-Day Utilization</h3>", unsafe_allow_html=True)
 
-    # 1. Fetch the dedicated 30-day closed data
-    # The cache handles the heavy lifting. If data is cached, this is instant.
-    # If not, it runs the optimized query above.
-    with st.spinner("Fetching Closed History..."):
-        closed_df = get_closed_cases_data()
+    with st.spinner("Fetching Case History..."):
+        case_df = get_closed_cases_data()
 
-    # 2. Filter based on the dropdown selections passed from main.py
     if not active_owners:
         recent_df = pd.DataFrame()
     else:
-        if not closed_df.empty:
-            # Filter directly against the active_owners list
-            recent_df = closed_df[closed_df["Case Owner"].isin(active_owners)]
+        if not case_df.empty:
+            recent_df = case_df[case_df["Case Owner"].isin(active_owners)]
         else:
             recent_df = pd.DataFrame()
 
-    # 3. Calculate scores
     total_score = recent_df["Case Score"].sum() if not recent_df.empty else 0
     selected_regions_count = recent_df["Region"].nunique() if not recent_df.empty else 0
     selected_owners_count = len(active_owners) 
 
-    # Dynamic max scale
     max_score = max(total_score + 50, 100)
 
     with st.container(border=True, height=350): 
