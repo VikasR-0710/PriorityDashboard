@@ -113,12 +113,15 @@ def get_closed_cases_data():
     df['Case Owner'] = df['Case Owner'].fillna('UNKNOWN')
     df['Region'] = df['Case Owner'].map(OWNER_REGION_MAP).fillna('UNKNOWN')
 
+    
     df['Case Score'] = df.apply(
         lambda row: calculate_score(
-            row['Sevone'], 
-            row['Severity'], 
-            row['Support Level'], 
-            row['Escalated']
+            sevone=row['Sevone'], 
+            severity=row['Severity'], 
+            support_level=row['Support Level'], 
+            escalated=row['Escalated'],
+            sentiment="",      # Closed cases usually don't have live sentiment
+            sla_mins=0         # Treat as "Not Overdue" for scoring consistency
         ), 
         axis=1
     )

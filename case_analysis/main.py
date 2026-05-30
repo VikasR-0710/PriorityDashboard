@@ -11,8 +11,8 @@ sys.path.append(os.getcwd())
 # -------------------------------------------------------
 # 🕒 BACKGROUND SCHEDULER (Runs Once Per Session)
 # -------------------------------------------------------
-INITIAL_DELAY_MINUTES = 1  # ⏱️ Wait 2 minutes before first run
-INTERVAL_MINUTES = 15      # Runs every 15 minutes after that
+INITIAL_DELAY_MINUTES = 60  # ⏱️ Wait 2 minutes before first run
+INTERVAL_MINUTES = 60      # Runs every 15 minutes after that
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 

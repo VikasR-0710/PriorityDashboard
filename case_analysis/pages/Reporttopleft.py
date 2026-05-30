@@ -73,16 +73,92 @@ def fetch_snowflake_sentiments():
         print(f"❌ Snowflake fetch failed: {e}")
         return {}
 
-def calculate_score(sevone, severity, support_level, escalated):
-    if sevone: return 14
-    if escalated: return 13
+def calculate_score(sevone, severity, support_level, escalated, sentiment="", sla_mins=None):
+    """
+    Calculate case priority score.
+    
+    Args:
+        sevone: Boolean
+        severity: String (S1, S2, etc.)
+        support_level: String (Premium, Standard, etc.)
+        escalated: Boolean
+        sentiment: String (optional, default "") -> Treats as "Not Available"
+        sla_mins: Int/Float (optional, default None) -> Treats as "Not Overdue"
+    """
+    # 1. Highest Priority Overrides
+    if sevone: return 35
+    if escalated: return 30
+    
+    # 2. Determine SLA Status
+    # If sla_mins is None (missing) or >= 0 (due/future), it is NOT overdue.
+    # Only if it is a number < 0 is it overdue.
+    is_overdue = isinstance(sla_mins, (int, float)) and sla_mins < 0
+    
+    # 3. Determine Sentiment Category
+    sentiment_lower = (sentiment or "").lower().strip()
+    if not sentiment_lower or sentiment_lower in ["n/a", "none", "null", "sentiment not available yet"]:
+        sentiment_category = "not_available"
+    elif "negative" in sentiment_lower or "critical" in sentiment_lower:
+        sentiment_category = "negative"
+    elif "positive" in sentiment_lower:
+        sentiment_category = "positive"
+    else:
+        sentiment_category = "neutral"
+    
+    # 4. Normalize Severity & Support
+    severity_norm = (severity or "").strip().upper()
+    if severity_norm.startswith("SEV") or severity_norm == "SEVONE": severity_norm = "S1"
+    if severity_norm not in ["S1", "S2", "S3", "S4"]: severity_norm = "S4"
+    
+    support_norm = (support_level or "").lower()
+    is_premium = "premium" in support_norm or "plus" in support_norm
+    
+    # 5. Score Matrix
     score_map = {
-        ("S1", "Premium Plus"): 12, ("S1", "Premium (24x7)"): 12, ("S1", "Standard"): 10,
-        ("S2", "Premium Plus"): 9, ("S2", "Premium (24x7)"): 8, ("S2", "Standard"): 7,
-        ("S3", "Premium Plus"): 6, ("S3", "Premium (24x7)"): 5, ("S3", "Standard"): 4,
-        ("S4", "Premium Plus"): 3, ("S4", "Premium (24x7)"): 2, ("S4", "Standard"): 1
+        # S1 Premium
+        ("S1", True, "negative", True): 28, ("S1", True, "positive", True): 27,
+        ("S1", True, "neutral", True): 27, ("S1", True, "not_available", True): 27,
+        ("S1", True, "negative", False): 26, ("S1", True, "positive", False): 25,
+        ("S1", True, "neutral", False): 25, ("S1", True, "not_available", False): 25,
+        # S2 Premium
+        ("S2", True, "negative", True): 23, ("S2", True, "positive", True): 22,
+        ("S2", True, "neutral", True): 22, ("S2", True, "not_available", True): 22,
+        ("S2", True, "negative", False): 21, ("S2", True, "positive", False): 20,
+        ("S2", True, "neutral", False): 20, ("S2", True, "not_available", False): 20,
+        # S1 Standard
+        ("S1", False, "negative", True): 23, ("S1", False, "positive", True): 22,
+        ("S1", False, "neutral", True): 22, ("S1", False, "not_available", True): 22,
+        ("S1", False, "negative", False): 21, ("S1", False, "positive", False): 20,
+        ("S1", False, "neutral", False): 20, ("S1", False, "not_available", False): 20,
+        # S3 Premium
+        ("S3", True, "negative", True): 16, ("S3", True, "positive", True): 15,
+        ("S3", True, "neutral", True): 15, ("S3", True, "not_available", True): 15,
+        ("S3", True, "negative", False): 14, ("S3", True, "positive", False): 13,
+        ("S3", True, "neutral", False): 13, ("S3", True, "not_available", False): 13,
+        # S2 Standard
+        ("S2", False, "negative", True): 12, ("S2", False, "positive", True): 11,
+        ("S2", False, "neutral", True): 11, ("S2", False, "not_available", True): 11,
+        ("S2", False, "negative", False): 10, ("S2", False, "positive", False): 9,
+        ("S2", False, "neutral", False): 9, ("S2", False, "not_available", False): 9,
+        # S4 Premium
+        ("S4", True, "negative", True): 8, ("S4", True, "positive", True): 7,
+        ("S4", True, "neutral", True): 7, ("S4", True, "not_available", True): 7,
+        ("S4", True, "negative", False): 6, ("S4", True, "positive", False): 5,
+        ("S4", True, "neutral", False): 5, ("S4", True, "not_available", False): 5,
+        # S3 Standard
+        ("S3", False, "negative", True): 8, ("S3", False, "positive", True): 7,
+        ("S3", False, "neutral", True): 7, ("S3", False, "not_available", True): 7,
+        ("S3", False, "negative", False): 6, ("S3", False, "positive", False): 5,
+        ("S3", False, "neutral", False): 5, ("S3", False, "not_available", False): 5,
+        # S4 Standard
+        ("S4", False, "negative", True): 4, ("S4", False, "positive", True): 3,
+        ("S4", False, "neutral", True): 3, ("S4", False, "not_available", True): 3,
+        ("S4", False, "negative", False): 2, ("S4", False, "positive", False): 1,
+        ("S4", False, "neutral", False): 1, ("S4", False, "not_available", False): 1,
     }
-    return score_map.get((severity, support_level), 0)
+    
+    key = (severity_norm, is_premium, sentiment_category, is_overdue)
+    return score_map.get(key, 0)
 
 def get_sla_hours(severity, support_level):
     if not severity or severity == "N/A": return None
@@ -235,7 +311,8 @@ def get_processed_data():
         severity = case.get("Severity__c") or "N/A"
         sevone = case.get("SEVONE__c")
         escalated = case.get("IsEscalated") or False
-        case_score = calculate_score(sevone, severity, support_level, escalated)  
+        
+        # Get SLA hours and calculate SLA metrics
         sla_hours = get_sla_hours(severity, support_level)      
 
         last_commenter = "Internal Comment"
@@ -257,7 +334,16 @@ def get_processed_data():
                     
         sla_text, sla_mins = calculate_sla_variance(sla_deadline)
         breach_shift = get_breach_shift(sla_deadline, sla_mins)
-        sentiment = sf_sentiments.get(case.get("CaseNumber"), "")
+        
+        # Get sentiment from Snowflake, handle empty case
+        sentiment_raw = sf_sentiments.get(case.get("CaseNumber"), "")
+        if not sentiment_raw or not sentiment_raw.strip():
+            sentiment = "sentiment not available yet"
+        else:
+            sentiment = sentiment_raw
+        
+        # Calculate case score with new logic
+        case_score = calculate_score(sevone, severity, support_level, escalated, sentiment, sla_mins)
 
         dashboard.append({
             "Region": OWNER_REGION_MAP.get(owner_name, "UNKNOWN"),
@@ -315,6 +401,7 @@ def apply_filters_and_ranking(df):
         filtered = filtered[mask]
         filtered["Sequential_Rank"] = range(1, len(filtered) + 1)
     elif not filtered.empty:
+        # Sort by Case Score (descending) then by Case Owner for consistent ranking
         filtered = filtered.sort_values(by=["Case Owner", "Case Score"], ascending=[True, False])
         filtered["Sequential_Rank"] = filtered.groupby("Case Owner").cumcount() + 1
 
@@ -354,8 +441,9 @@ def render_table(filtered_df, cases):
             cols[6].write(row["Status"]); cols[7].write("Yes" if row["Escalated"] else "No")
 
             sentiment = row["Sentiment"]
-            if not sentiment or sentiment.strip() == "":
-                cols[8].write("")
+            # Display sentiment with appropriate styling
+            if not sentiment or sentiment.strip() == "" or sentiment == "sentiment not available yet":
+                cols[8].info("sentiment not available yet")
             else:
                 s_low = sentiment.lower()
                 if "positive" in s_low: cols[8].success(sentiment) 
