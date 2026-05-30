@@ -387,21 +387,48 @@ def apply_filters_and_ranking(df):
     with c3:
         cats = ["Need Immediate Attention", "Need Secondary Attention"]
         def_sla = st.session_state.get("selected_sla_status", [])
-        sel_sla = st.multiselect(":hourglass_flowing_sand: SLA Prioritization", cats, default=def_sla, key="sla_filter")
+        sel_sla = st.multiselect(":hourglass_flowing_sand: Prioritization", cats, default=def_sla, key="sla_filter")
         st.session_state.selected_sla_status = sel_sla
 
     if not active_regions: return temp_df, []
+    
+    # Filter by selected owners if any are selected
     filtered = temp_df[temp_df["Case Owner"].isin(sel_owners)] if sel_owners else temp_df
 
     if sel_sla:
-        filtered = filtered.sort_values(by="SLA_Minutes", ascending=True)
-        mask = pd.Series(False, index=filtered.index)
-        if "Need Immediate Attention" in sel_sla: mask.loc[filtered.head(25).index] = True
-        if "Need Secondary Attention" in sel_sla: mask.loc[filtered.iloc[25:50].index] = True
-        filtered = filtered[mask]
-        filtered["Sequential_Rank"] = range(1, len(filtered) + 1)
+        # Sort ALL cases by Case Score descending
+        filtered = filtered.sort_values(by="Case Score", ascending=False).reset_index(drop=True)
+        
+        # Determine which rows to keep based on selections
+        rows_to_keep = []
+        
+        if "Need Immediate Attention" in sel_sla:
+            # Add indices 0-24 (first 25 rows)
+            rows_to_keep.extend(range(0, min(25, len(filtered))))
+            
+        if "Need Secondary Attention" in sel_sla:
+            # Add indices 25-49 (next 25 rows)
+            start_idx = 25
+            end_idx = min(50, len(filtered))
+            rows_to_keep.extend(range(start_idx, end_idx))
+        
+        # Remove duplicates and sort
+        rows_to_keep = sorted(set(rows_to_keep))
+        
+        # Filter to keep only selected rows
+        filtered = filtered.iloc[rows_to_keep].reset_index(drop=True)
+        
+        # Assign Sequential_Rank: 1-25 for Immediate, 26-50 for Secondary
+        if "Need Immediate Attention" in sel_sla and "Need Secondary Attention" in sel_sla:
+            # Both selected: need to map back to original positions
+            filtered["Sequential_Rank"] = [i + 1 for i in rows_to_keep]
+        elif "Need Immediate Attention" in sel_sla:
+            filtered["Sequential_Rank"] = range(1, len(filtered) + 1)
+        elif "Need Secondary Attention" in sel_sla:
+            filtered["Sequential_Rank"] = range(1, len(filtered) + 1)
+        
     elif not filtered.empty:
-        # Sort by Case Score (descending) then by Case Owner for consistent ranking
+        # When no SLA filter, group by owner and rank within each owner
         filtered = filtered.sort_values(by=["Case Owner", "Case Score"], ascending=[True, False])
         filtered["Sequential_Rank"] = filtered.groupby("Case Owner").cumcount() + 1
 
