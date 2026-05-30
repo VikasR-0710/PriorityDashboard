@@ -17,8 +17,7 @@ INTERVAL_MINUTES = 60      # Runs every 15 minutes after that
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 🔍 SPECIFIC PATH BASED ON YOUR STRUCTURE
-# main.py is in case_analysis/
-# sentiment_analysis.py is in case_analysis/pages/
+
 SENTIMENT_SCRIPT_PATH = os.path.join(SCRIPT_DIR, "pages", "Sentiment_analysis.py")
 
 def _run_sentiment_pipeline_loop():
