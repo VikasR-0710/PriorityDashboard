@@ -288,6 +288,41 @@ def get_breach_shift(deadline_str, sla_minutes):
         return "N/A"
     except: return "N/A"
 
+def is_generalized_comment(comment_body):
+    """
+    Evaluates if a comment is a generalized/placeholder response.
+    Returns True if generalized, False if it contains substantive updates.
+    """
+    if not comment_body:
+        return True
+        
+    body_lower = comment_body.lower().strip()
+    
+    # 1. Check for very short comments 
+    word_count = len(body_lower.split())
+    if word_count < 5:
+        return True
+        
+    # 2. Check for common boilerplate phrases
+    generic_phrases = [
+        "looking into this",
+        "working on this",
+        "will get back to you",
+        "checking with the team",
+        "checking internally",
+        "investigating the issue",
+        "thank you for your patience",
+        "update you shortly",
+        "out of office"
+    ]
+    
+    if any(phrase in body_lower for phrase in generic_phrases):
+        return True
+        
+    return False
+
+
+
 def get_processed_data():
     with st.spinner("Fetching Salesforce Cases..."):
         cases = fetch_cases()
@@ -300,6 +335,7 @@ def get_processed_data():
         customer_name = (case.get("Account") or {}).get("Name", "N/A")
         support_level = case.get("Support_Level__c") or "N/A"
         project_id = case.get("AccountName__c")
+        
         if customer_name != "N/A" and "Xactly" in customer_name and project_id:
             try:
                 cached = get_project_support(project_id)
@@ -314,10 +350,19 @@ def get_processed_data():
         last_commenter = "Internal Comment"
         last_customer_comment_time = "N/A"
         comments = (case.get("CaseComments") or {}).get("records", [])
+        
         if comments:
             latest = comments[0]
             created_by = (latest.get("CreatedBy") or {}).get("Name", "")
             last_commenter = "Support Comment" if created_by in OWNER_REGION_MAP else "Customer Comment"
+            
+            # --- NEW GENERALIZED COMMENT CHECK ---
+            if last_commenter == "Support Comment":
+                comment_body = latest.get("CommentBody", "")
+                if is_generalized_comment(comment_body):
+                    last_commenter = "Support Comment (Generalized)"
+            # -------------------------------------
+
             for comment in comments:
                 if (comment.get("CreatedBy") or {}).get("Name") == 'Customer Support User':
                     last_customer_comment_time = convert_to_ist(comment.get("CreatedDate") or "N/A")
