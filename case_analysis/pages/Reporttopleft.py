@@ -1,15 +1,75 @@
 import streamlit as st
 import pandas as pd
-from services.case_service import CaseService
-from datetime import datetime, timedelta
+import hashlib
+import json
+import time
+import math
+import numpy as np
 import pytz
 import os
 import snowflake.connector
+from datetime import datetime, timedelta
+from services.case_service import CaseService
 
-# Initialize service and connection
-service = CaseService()
-sf = service.get_connection()
+# -------------------------------------------------------
+# 🔑 CONNECTIONS & CACHING
+# -------------------------------------------------------
+@st.cache_resource
+def get_sf_connection():
+    service = CaseService()
+    return service.get_connection()
 
+@st.cache_resource
+def get_snowflake_connection():
+    return snowflake.connector.connect(
+        user=os.getenv("SNOWFLAKE_USER"),
+        password=os.getenv("SNOWFLAKE_PASSWORD"),
+        account=os.getenv("SNOWFLAKE_ACCOUNT"),
+        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "GENERALBIZ_WAREHOUSE"),
+        database=os.getenv("SNOWFLAKE_DATABASE", "CUSTOMER_SUPPORT_BOT_LOGS"),
+        schema=os.getenv("SNOWFLAKE_SCHEMA", "CHAT_DATA")
+    )
+
+def ensure_audit_table_exists():
+    """Creates audit table if missing. Runs silently on first load."""
+    try:
+        conn = get_snowflake_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS CASE_AUDIT_HISTORY (
+                AUDIT_ID STRING DEFAULT UUID_STRING() PRIMARY KEY,
+                CASE_NUMBER STRING NOT NULL,
+                SNAPSHOT_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+                CHANGE_TYPE STRING, CHANGED_COLUMNS VARIANT,
+                OLD_STATE VARIANT, NEW_STATE VARIANT, DATA_HASH STRING
+            )
+        """)
+        cur.execute("ALTER TABLE CASE_AUDIT_HISTORY SET DATA_RETENTION_TIME_IN_DAYS = 2")
+        cur.execute("ALTER TABLE CASE_AUDIT_HISTORY CLUSTER BY (SNAPSHOT_TIMESTAMP, CASE_NUMBER)")
+        cur.close()
+    except Exception:
+        pass  # Fail silently; dashboard should still work
+
+# -------------------------------------------------------
+# 🎨 CSS & UI HELPERS
+# -------------------------------------------------------
+def inject_custom_css():
+    st.markdown("""
+<style>
+    [data-testid="stSidebar"] { display: none !important; }
+    [data-testid="collapsedControl"] { display: none !important; }
+    .main { padding-top:10px; }
+    .block-container { padding-top:1rem; }
+    h1 { font-size:42px !important; font-weight:800 !important; }
+    [data-testid="stHorizontalBlock"] { gap:0.2rem; }
+    p { font-size:12px !important; }
+    button { font-size:11px !important; padding:0.1rem !important; }        
+</style>
+""", unsafe_allow_html=True)
+
+# -------------------------------------------------------
+# 📊 BUSINESS LOGIC (SCORING, SLA, SENTIMENT)
+# -------------------------------------------------------
 OWNER_REGION_MAP = {
     "Sakthi Devi SK": "APAC", "Mohamed Ramzin": "APAC", "Syeda Sajida": "APAC", "Yogesh R": "APAC", 
     "Ganesh Babu": "APAC", "Srinivas Aaguri": "APAC", "Sindhu M Y": "EMEA", "Payal Gupta": "EMEA", 
@@ -31,70 +91,24 @@ OWNER_REGION_MAP = {
     "Merlyn Pushparaj": "P+", "Naveen Kumar Surisetti": "P+", "Xactly Support Agent": "Agent"
 }
 
-def inject_custom_css():
-    st.markdown("""
-<style>
-    [data-testid="stSidebar"] { display: none !important; }
-    [data-testid="collapsedControl"] { display: none !important; }
-    .main { padding-top:10px; }
-    .block-container { padding-top:1rem; }
-    h1 { font-size:42px !important; font-weight:800 !important; }
-    [data-testid="stHorizontalBlock"] { gap:0.2rem; }
-    p { font-size:12px !important; }
-    button { font-size:11px !important; padding:0.1rem !important; }        
-</style>
-""", unsafe_allow_html=True)
-
-@st.cache_resource
-def get_sf_connection():
-    service = CaseService()
-    return service.get_connection()
-
 @st.cache_data(ttl=3600)
 def fetch_snowflake_sentiments():
-    """Fetches CaseNumber -> Sentiment mapping from Snowflake. Cached for 1 hour."""
     try:
-        conn = snowflake.connector.connect(
-            user=os.getenv("SNOWFLAKE_USER"),
-            password=os.getenv("SNOWFLAKE_PASSWORD"),
-            account=os.getenv("SNOWFLAKE_ACCOUNT"),
-            warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "GENERALBIZ_WAREHOUSE"),
-            database=os.getenv("SNOWFLAKE_DATABASE", "CUSTOMER_SUPPORT_BOT_LOGS"),
-            schema=os.getenv("SNOWFLAKE_SCHEMA", "CHAT_DATA")
-        )
+        conn = get_snowflake_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT CaseNumber, Sentiment FROM DBD_SENTIMENT_DATA")
         rows = cursor.fetchall()
         sentiments = {row[0]: row[1] for row in rows}
         cursor.close()
-        conn.close()
         return sentiments
     except Exception as e:
         print(f"❌ Snowflake fetch failed: {e}")
         return {}
 
 def calculate_score(sevone, severity, support_level, escalated, sentiment="", sla_mins=None):
-    """
-    Calculate case priority score.
-    
-    Args:
-        sevone: Boolean
-        severity: String (S1, S2, etc.)
-        support_level: String (Premium, Standard, etc.)
-        escalated: Boolean
-        sentiment: String (optional, default "") -> Treats as "Not Available"
-        sla_mins: Int/Float (optional, default None) -> Treats as "Not Overdue"
-    """
-    # 1. Highest Priority Overrides
     if sevone: return 35
     if escalated: return 30
-    
-    # 2. Determine SLA Status
-    # If sla_mins is None (missing) or >= 0 (due/future), it is NOT overdue.
-    # Only if it is a number < 0 is it overdue.
     is_overdue = isinstance(sla_mins, (int, float)) and sla_mins < 0
-    
-    # 3. Determine Sentiment Category
     sentiment_lower = (sentiment or "").lower().strip()
     if not sentiment_lower or sentiment_lower in ["n/a", "none", "null", "sentiment not available yet"]:
         sentiment_category = "not_available"
@@ -104,61 +118,46 @@ def calculate_score(sevone, severity, support_level, escalated, sentiment="", sl
         sentiment_category = "positive"
     else:
         sentiment_category = "neutral"
-    
-    # 4. Normalize Severity & Support
     severity_norm = (severity or "").strip().upper()
     if severity_norm.startswith("SEV") or severity_norm == "SEVONE": severity_norm = "S1"
     if severity_norm not in ["S1", "S2", "S3", "S4"]: severity_norm = "S4"
-    
     support_norm = (support_level or "").lower()
     is_premium = "premium" in support_norm or "plus" in support_norm
-    
-    # 5. Score Matrix
     score_map = {
-        # S1 Premium
         ("S1", True, "negative", True): 28, ("S1", True, "positive", True): 27,
         ("S1", True, "neutral", True): 27, ("S1", True, "not_available", True): 27,
         ("S1", True, "negative", False): 26, ("S1", True, "positive", False): 25,
         ("S1", True, "neutral", False): 25, ("S1", True, "not_available", False): 25,
-        # S2 Premium
         ("S2", True, "negative", True): 23, ("S2", True, "positive", True): 22,
         ("S2", True, "neutral", True): 22, ("S2", True, "not_available", True): 22,
         ("S2", True, "negative", False): 21, ("S2", True, "positive", False): 20,
         ("S2", True, "neutral", False): 20, ("S2", True, "not_available", False): 20,
-        # S1 Standard
         ("S1", False, "negative", True): 23, ("S1", False, "positive", True): 22,
         ("S1", False, "neutral", True): 22, ("S1", False, "not_available", True): 22,
         ("S1", False, "negative", False): 21, ("S1", False, "positive", False): 20,
         ("S1", False, "neutral", False): 20, ("S1", False, "not_available", False): 20,
-        # S3 Premium
         ("S3", True, "negative", True): 16, ("S3", True, "positive", True): 15,
         ("S3", True, "neutral", True): 15, ("S3", True, "not_available", True): 15,
         ("S3", True, "negative", False): 14, ("S3", True, "positive", False): 13,
         ("S3", True, "neutral", False): 13, ("S3", True, "not_available", False): 13,
-        # S2 Standard
         ("S2", False, "negative", True): 12, ("S2", False, "positive", True): 11,
         ("S2", False, "neutral", True): 11, ("S2", False, "not_available", True): 11,
         ("S2", False, "negative", False): 10, ("S2", False, "positive", False): 9,
         ("S2", False, "neutral", False): 9, ("S2", False, "not_available", False): 9,
-        # S4 Premium
         ("S4", True, "negative", True): 8, ("S4", True, "positive", True): 7,
         ("S4", True, "neutral", True): 7, ("S4", True, "not_available", True): 7,
         ("S4", True, "negative", False): 6, ("S4", True, "positive", False): 5,
         ("S4", True, "neutral", False): 5, ("S4", True, "not_available", False): 5,
-        # S3 Standard
         ("S3", False, "negative", True): 8, ("S3", False, "positive", True): 7,
         ("S3", False, "neutral", True): 7, ("S3", False, "not_available", True): 7,
         ("S3", False, "negative", False): 6, ("S3", False, "positive", False): 5,
         ("S3", False, "neutral", False): 5, ("S3", False, "not_available", False): 5,
-        # S4 Standard
         ("S4", False, "negative", True): 4, ("S4", False, "positive", True): 3,
         ("S4", False, "neutral", True): 3, ("S4", False, "not_available", True): 3,
         ("S4", False, "negative", False): 2, ("S4", False, "positive", False): 1,
         ("S4", False, "neutral", False): 1, ("S4", False, "not_available", False): 1,
     }
-    
-    key = (severity_norm, is_premium, sentiment_category, is_overdue)
-    return score_map.get(key, 0)
+    return score_map.get((severity_norm, is_premium, sentiment_category, is_overdue), 0)
 
 def get_sla_hours(severity, support_level):
     if not severity or severity == "N/A": return None
@@ -168,8 +167,7 @@ def get_sla_hours(severity, support_level):
     severity_key = severity.strip().upper()
     if severity_key.startswith("SEV") or severity_key == "SEVONE": severity_key = "S1"
     elif severity_key not in ["S1", "S2", "S3", "S4"]: return None
-    tier = "premium" if is_premium else "standard"
-    return sla_map[severity_key].get(tier)
+    return sla_map[severity_key].get("premium" if is_premium else "standard")
 
 def is_in_weekend_window(dt):
     wd = dt.weekday()
@@ -311,8 +309,6 @@ def get_processed_data():
         severity = case.get("Severity__c") or "N/A"
         sevone = case.get("SEVONE__c")
         escalated = case.get("IsEscalated") or False
-        
-        # Get SLA hours and calculate SLA metrics
         sla_hours = get_sla_hours(severity, support_level)      
 
         last_commenter = "Internal Comment"
@@ -335,14 +331,8 @@ def get_processed_data():
         sla_text, sla_mins = calculate_sla_variance(sla_deadline)
         breach_shift = get_breach_shift(sla_deadline, sla_mins)
         
-        # Get sentiment from Snowflake, handle empty case
         sentiment_raw = sf_sentiments.get(case.get("CaseNumber"), "")
-        if not sentiment_raw or not sentiment_raw.strip():
-            sentiment = "sentiment not available yet"
-        else:
-            sentiment = sentiment_raw
-        
-        # Calculate case score with new logic
+        sentiment = "sentiment not available yet" if not sentiment_raw or not sentiment_raw.strip() else sentiment_raw
         case_score = calculate_score(sevone, severity, support_level, escalated, sentiment, sla_mins)
 
         dashboard.append({
@@ -364,6 +354,156 @@ def get_processed_data():
         })
     return pd.DataFrame(dashboard), cases
 
+# -------------------------------------------------------
+# 🔍 AUDIT HISTORY SYNC (Append-Only, Hash-Based)
+# -------------------------------------------------------
+def _make_serializable(obj):
+    if isinstance(obj, float) and (math.isinf(obj) or math.isnan(obj)): return None
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, (np.bool_,)): return bool(obj)
+    if isinstance(obj, pd.Timestamp): return obj.isoformat()
+    if pd.isna(obj): return None
+    return obj
+
+def _compute_hash(row_dict: dict) -> str:
+    clean = {k: _make_serializable(v) for k, v in row_dict.items()}
+    return hashlib.sha256(json.dumps(clean, sort_keys=True).encode()).hexdigest()
+
+def _get_latest_states(sf_conn, case_numbers: list) -> dict:
+    if not case_numbers: return {}
+    placeholders = ",".join(["%s"] * len(case_numbers))
+    query = f"""
+    SELECT CASE_NUMBER, DATA_HASH, NEW_STATE
+    FROM CASE_AUDIT_HISTORY
+    WHERE CASE_NUMBER IN ({placeholders})
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY CASE_NUMBER ORDER BY SNAPSHOT_TIMESTAMP DESC) = 1
+    """
+    cur = sf_conn.cursor()
+    cur.execute(query, case_numbers)
+    rows = cur.fetchall()
+    cur.close()
+    return {
+        row[0]: {"hash": row[1], "state": json.loads(row[2]) if row[2] else {}}
+        for row in rows
+    }
+
+def sync_audit_history(df: pd.DataFrame):
+    """Compares current dashboard state with Snowflake history. Inserts only changed/new rows."""
+    if df.empty: return
+    ensure_audit_table_exists()
+    
+    df = df.copy()
+    # Ensure boolean and numeric types are clean for JSON serialization
+    df["Escalated"] = df["Escalated"].astype(bool)
+    df["SLA_Minutes"] = pd.to_numeric(df["SLA_Minutes"], errors="coerce")
+    df["Case Score"] = pd.to_numeric(df["Case Score"], errors="coerce")
+
+    records = df.to_dict(orient="records")
+    current_states = {}
+    for r in records:
+        case_num = r["Case Number"]
+        # Create a clean dictionary for hashing and storage
+        clean_r = {k: _make_serializable(v) for k, v in r.items()}
+        current_states[case_num] = {"hash": _compute_hash(clean_r), "state": clean_r}
+
+    conn = get_snowflake_connection()
+    prev_states = _get_latest_states(conn, list(current_states.keys()))
+    now_utc = datetime.now(pytz.utc)
+    audit_rows = []
+
+    for case_num, curr in current_states.items():
+        prev = prev_states.get(case_num)
+        if not prev:
+            # NEW Case
+            audit_rows.append((
+                case_num, 
+                now_utc, 
+                "NEW",
+                json.dumps(list(curr["state"].keys())), # CHANGED_COLUMNS (JSON String)
+                None,                                   # OLD_STATE (NULL)
+                json.dumps(curr["state"]),              # NEW_STATE (JSON String)
+                curr["hash"]                            # DATA_HASH
+            ))
+        elif prev["hash"] != curr["hash"]:
+            # UPDATED Case
+            old_s, new_s = prev["state"], curr["state"]
+            # Identify exactly which columns changed
+            changed_cols = [k for k in new_s if str(new_s.get(k)) != str(old_s.get(k))]
+            
+            audit_rows.append((
+                case_num, 
+                now_utc, 
+                "UPDATED",
+                json.dumps(changed_cols),               # CHANGED_COLUMNS (JSON String)
+                json.dumps(old_s),                      # OLD_STATE (JSON String)
+                json.dumps(new_s),                      # NEW_STATE (JSON String)
+                curr["hash"]                            # DATA_HASH
+            ))
+
+    if not audit_rows:
+        return
+
+    cur = conn.cursor()
+    temp_table_name = "TEMP_AUDIT_STAGE_" + str(int(time.time()))
+    
+    try:
+        # 1. Create a temporary table with STRING columns for JSON fields
+        create_temp_sql = f"""
+        CREATE OR REPLACE TEMPORARY TABLE {temp_table_name} (
+            CASE_NUMBER STRING,
+            SNAPSHOT_TIMESTAMP TIMESTAMP_NTZ,
+            CHANGE_TYPE STRING,
+            CHANGED_COLUMNS_STR STRING,
+            OLD_STATE_STR STRING,
+            NEW_STATE_STR STRING,
+            DATA_HASH STRING
+        )
+        """
+        cur.execute(create_temp_sql)
+        
+        # 2. Insert raw strings into the temp table (No JSON parsing yet)
+        insert_temp_sql = f"""
+        INSERT INTO {temp_table_name} 
+        (CASE_NUMBER, SNAPSHOT_TIMESTAMP, CHANGE_TYPE, CHANGED_COLUMNS_STR, OLD_STATE_STR, NEW_STATE_STR, DATA_HASH)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """
+        cur.executemany(insert_temp_sql, audit_rows)
+        
+        # 3. Parse JSON and insert into the final history table
+        # This avoids the "Invalid expression in VALUES clause" error
+        final_insert_sql = f"""
+        INSERT INTO CASE_AUDIT_HISTORY 
+        (CASE_NUMBER, SNAPSHOT_TIMESTAMP, CHANGE_TYPE, CHANGED_COLUMNS, OLD_STATE, NEW_STATE, DATA_HASH)
+        SELECT 
+            CASE_NUMBER,
+            SNAPSHOT_TIMESTAMP,
+            CHANGE_TYPE,
+            PARSE_JSON(CHANGED_COLUMNS_STR),
+            PARSE_JSON(OLD_STATE_STR),
+            PARSE_JSON(NEW_STATE_STR),
+            DATA_HASH
+        FROM {temp_table_name}
+        """
+        cur.execute(final_insert_sql)
+        conn.commit()
+        print(f"✅ Audit Sync: Successfully inserted {len(audit_rows)} records via staging table.")
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Audit Insert Failed: {e}")
+        raise e
+    finally:
+        # Clean up temp table
+        try:
+            cur.execute(f"DROP TABLE IF EXISTS {temp_table_name}")
+        except:
+            pass
+        cur.close()
+
+# -------------------------------------------------------
+# 🎛️ FILTERS, RANKING & TABLE RENDERING
+# -------------------------------------------------------
 def apply_filters_and_ranking(df):
     c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
@@ -391,44 +531,22 @@ def apply_filters_and_ranking(df):
         st.session_state.selected_sla_status = sel_sla
 
     if not active_regions: return temp_df, []
-    
-    # Filter by selected owners if any are selected
     filtered = temp_df[temp_df["Case Owner"].isin(sel_owners)] if sel_owners else temp_df
 
     if sel_sla:
-        # Sort ALL cases by Case Score descending
         filtered = filtered.sort_values(by="Case Score", ascending=False).reset_index(drop=True)
-        
-        # Determine which rows to keep based on selections
         rows_to_keep = []
-        
         if "Need Immediate Attention" in sel_sla:
-            # Add indices 0-24 (first 25 rows)
             rows_to_keep.extend(range(0, min(25, len(filtered))))
-            
         if "Need Secondary Attention" in sel_sla:
-            # Add indices 25-49 (next 25 rows)
-            start_idx = 25
-            end_idx = min(50, len(filtered))
-            rows_to_keep.extend(range(start_idx, end_idx))
-        
-        # Remove duplicates and sort
+            rows_to_keep.extend(range(25, min(50, len(filtered))))
         rows_to_keep = sorted(set(rows_to_keep))
-        
-        # Filter to keep only selected rows
         filtered = filtered.iloc[rows_to_keep].reset_index(drop=True)
-        
-        # Assign Sequential_Rank: 1-25 for Immediate, 26-50 for Secondary
         if "Need Immediate Attention" in sel_sla and "Need Secondary Attention" in sel_sla:
-            # Both selected: need to map back to original positions
             filtered["Sequential_Rank"] = [i + 1 for i in rows_to_keep]
-        elif "Need Immediate Attention" in sel_sla:
+        else:
             filtered["Sequential_Rank"] = range(1, len(filtered) + 1)
-        elif "Need Secondary Attention" in sel_sla:
-            filtered["Sequential_Rank"] = range(1, len(filtered) + 1)
-        
     elif not filtered.empty:
-        # When no SLA filter, group by owner and rank within each owner
         filtered = filtered.sort_values(by=["Case Owner", "Case Score"], ascending=[True, False])
         filtered["Sequential_Rank"] = filtered.groupby("Case Owner").cumcount() + 1
 
@@ -468,7 +586,6 @@ def render_table(filtered_df, cases):
             cols[6].write(row["Status"]); cols[7].write("Yes" if row["Escalated"] else "No")
 
             sentiment = row["Sentiment"]
-            # Display sentiment with appropriate styling
             if not sentiment or sentiment.strip() == "" or sentiment == "sentiment not available yet":
                 cols[8].info("sentiment not available yet")
             else:
@@ -481,13 +598,3 @@ def render_table(filtered_df, cases):
             cols[9].write(row["Last Comment By"]); cols[10].write(row["Last Customer Comment"])
             cols[11].write(row["SLA Response Time"]); cols[12].write(row["SLA_Breach_Shift"])
             cols[13].markdown(f"<div style='color: #FFFFFF; font-weight: 600; font-size: 14px;'>{row['Sequential_Rank']}</div>", unsafe_allow_html=True)
-
-def main():
-    inject_custom_css()
-    st.title("🎯 Support Case Dashboard")
-    df, raw_cases = get_processed_data()
-    filtered_df, _ = apply_filters_and_ranking(df)
-    render_table(filtered_df, raw_cases)
-
-if __name__ == "__main__":
-    main()
