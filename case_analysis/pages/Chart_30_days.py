@@ -22,7 +22,7 @@ OWNER_LIST = [
     'Shreyas G Nambiar', 'Shivendra Yadav', 'Sindhu M Y', 'Sivagnana Bharathi Nagaraj', 'Sivaji Koya',
     'Srinivas Aaguri', 'Sumit Paul', 'Sumit', 'Sushmitha Rayalkeri', 'Syeda Sajida',
     'Tarun Buthala', 'Ullas Shenoy', 'Vikas R', 'Vilas Potadar', 'Vipul S G',
-    'Vishal Mavi', 'Yogesh R', 'Zareena Bano', 'Zareena'
+    'Vishal Mavi', 'Yogesh R', 'Zareena Bano', 'Zareena','Joshua Halle'
 ]
 
 @st.cache_data(ttl=3600)
@@ -30,7 +30,8 @@ def get_all_breach_records():
     sf = get_sf_connection()
     owner_names_str = "', '".join(OWNER_LIST)
     
-    query = f"""SELECT Id, CaseNumber, Subject, Owner.Name, Account.Name, Support_Level__c, Severity__c, CreatedDate,
+    # UPDATED: Added Heal_Desk__c to the query
+    query = f"""SELECT Id, CaseNumber, Subject, Owner.Name, Account.Name, Support_Level__c, Severity__c, CreatedDate, Heal_Desk__c,
                (SELECT CommentBody, CreatedBy.Name, CreatedDate, IsPublished FROM CaseComments WHERE IsPublished=true ORDER BY CreatedDate DESC)
         FROM Case WHERE Owner.Name IN ('{owner_names_str}')
           AND Status IN ('New', 'Open', 'Assigned') AND Severity__c != null"""
@@ -76,15 +77,14 @@ def get_all_breach_records():
                         break
 
             sla_start_dt = None
-            if comments and isinstance(comments, list) and len(comments) >= 2:
+            if comments and isinstance(comments, list):
                 latest = comments[0]
-                prev = comments[1]
                 latest_author = (latest.get('CreatedBy') or {}).get('Name', '')
-                prev_author = (prev.get('CreatedBy') or {}).get('Name', '')
+                
                 latest_is_support = latest_author in OWNER_REGION_MAP
-                prev_is_support = prev_author in OWNER_REGION_MAP
                 latest_is_gen = is_generalized_comment(latest.get('CommentBody', ''))
-                if latest_is_support and not latest_is_gen and prev_is_support:
+                
+                if latest_is_support and not latest_is_gen:
                     sla_start_dt = convert_to_ist_dt(latest.get('CreatedDate'))
 
             effective_start_dt = sla_start_dt if sla_start_dt else last_customer_comment_dt
@@ -112,7 +112,8 @@ def get_all_breach_records():
                     'Last Customer Comment': lcc_str, 'SLA Deadline': sla_deadline_str,
                     'SLA Variance (mins)': int(sla_mins),
                     'SLA Status': f"🚨 Overdue: {sla_text.split(': ')[1] if ': ' in sla_text else sla_text}",
-                    'Breach_Month': breach_month
+                    'Breach_Month': breach_month,
+                    'Is_Heal_Desk': bool(row.get('Heal_Desk__c')) # Added Heal Desk flag
                 })
         except Exception as e:
             print(f"⚠️ Chart SLA Calc Error: {e}")
@@ -121,15 +122,29 @@ def get_all_breach_records():
     return pd.DataFrame(all_breaches) if all_breaches else pd.DataFrame()
 
 
-def render_30_day_chart(active_owners):
+def render_30_day_chart(active_owners, search_query="", is_heal_desk_filter=False):
     st.markdown("<h3 style='color: #F8FAFC; margin-top: 0; margin-bottom: 10px;'>📊 Ongoing SLA Breaches</h3>", unsafe_allow_html=True)
     
     all_breaches_df = get_all_breach_records()
     
+    # Filter by active owners
     if active_owners:
         filtered_df = all_breaches_df[all_breaches_df['Case Owner'].isin(active_owners)]
     else:
         filtered_df = all_breaches_df.copy()
+    
+    #  Apply Heal Desk Filter
+    if is_heal_desk_filter:
+        filtered_df = filtered_df[filtered_df['Is_Heal_Desk'] == True].copy()
+    
+    # 🔍 Apply search filter if exists
+    if search_query:
+        search_terms = [term.strip() for term in search_query.split(",") if term.strip()]
+        if search_terms:
+            mask = pd.Series(False, index=filtered_df.index)
+            for term in search_terms:
+                mask = mask | filtered_df["Case Number"].astype(str).str.contains(term, case=False, na=False)
+            filtered_df = filtered_df[mask]
 
     with st.container(border=True, height=350): 
         if filtered_df.empty:
@@ -149,7 +164,7 @@ def render_30_day_chart(active_owners):
                 hovertemplate='<b>Standard</b><br> %{x}<br>🔴 %{y}<extra></extra>'))
             fig.add_trace(go.Bar(x=formatted_months, y=pivot_df['Premium'].astype(int).tolist(), name='Premium',
                 marker_color='rgba(16, 185, 129, 0.95)', marker_line_color='rgba(5, 150, 105, 1)', width=0.35,
-                hovertemplate='<b>Premium</b><br>📅 %{x}<br>🔴 %{y}<extra></extra>'))
+                hovertemplate='<b>Premium</b><br>📅 %{x}<br> %{y}<extra></extra>'))
                 
             fig.update_layout(barmode='group', bargap=0.15, bargroupgap=0.1, height=330,
                 margin=dict(l=45, r=15, t=25, b=50), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -157,7 +172,6 @@ def render_30_day_chart(active_owners):
                 xaxis=dict(tickangle=-45, gridcolor='#334155', tickfont=dict(size=10, color="#94A3B8")),
                 yaxis=dict(title="Breached Cases", gridcolor='#334155', tickfont=dict(size=10, color="#94A3B8")),
                 legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5, font=dict(size=10, color="#E2E8F0")),
-                # ✅ FIXED: Now matches the detail table count exactly
                 annotations=[dict(x=0.5, y=1.02, xref="paper", yref="paper", 
                     text=f"Total Active Breaches: <b>{len(filtered_df)}</b>", 
                     showarrow=False, font=dict(size=11, color="#94A3B8"))])
@@ -172,7 +186,6 @@ def render_30_day_chart(active_owners):
                     "Case Owner": st.column_config.TextColumn("Owner", width="small"), "Severity": st.column_config.TextColumn("Sev", width="xsmall"),
                     "Support Level": st.column_config.TextColumn("Support", width="small"), "SLA Status": st.column_config.TextColumn("Status", width="medium"),
                     "SLA Deadline": st.column_config.TextColumn("Deadline", width="small"), 
-                    ##"Last Customer Comment": st.column_config.TextColumn("Last Comment", width="small"),
                     "Subject": st.column_config.TextColumn("Subject", width="large")})
             p_count = (filtered_df['Support Tier'] == 'Premium').sum()
             st.markdown(f"<div style='text-align:right; font-size:11px; color:#94A3B8; margin-top:8px;'><b>{len(filtered_df)-p_count}</b> Standard • <b>{p_count}</b> Premium breached cases</div>", unsafe_allow_html=True)

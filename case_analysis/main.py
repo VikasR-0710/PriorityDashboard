@@ -36,7 +36,7 @@ def _run_sentiment_pipeline_loop():
                 print(f"❌ Pipeline execution failed: {e}")
                 import traceback
                 traceback.print_exc()
-            print(f"⏳ Sentiment scheduler: Waiting {INTERVAL_MINUTES} minutes until next run...")
+            print(f" Sentiment scheduler: Waiting {INTERVAL_MINUTES} minutes until next run...")
             time.sleep(INTERVAL_MINUTES * 60)
     except Exception as e:
         print(f"🔥 Background scheduler crashed: {e}")
@@ -80,11 +80,9 @@ st.set_page_config(
 # -------------------------------------------------------
 # 🎨 UI THEME & CSS
 # -------------------------------------------------------
+# Set default accent color if not present
 if 'accent_color' not in st.session_state:
     st.session_state.accent_color = "#3B82F6"
-
-if st.button("🎨 Toggle Accent Theme (Blue / Slate)"):
-    st.session_state.accent_color = "#64748B" if st.session_state.accent_color == "#3B82F6" else "#3B82F6"
 
 inject_custom_css()
 
@@ -104,6 +102,24 @@ st.markdown(
     .dashboard-title {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important; color: #FFFFFF !important; font-size: 2rem !important; font-weight: 700 !important; letter-spacing: -0.5px !important; margin-bottom: 4px !important; }}
     .dashboard-subtitle {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; color: #94A3B8 !important; font-size: 0.95rem !important; margin-bottom: 20px !important; }}
     .accent-bar {{ height: 4px; width: 60px; background-color: {st.session_state.accent_color}; border-radius: 2px; margin-bottom: 25px; }}
+    
+    /* 🎯 Sleek Search Input Styling */
+    div[data-testid="stTextInput"] > div > div > input {{
+        background-color: #1E293B !important;
+        border: 1px solid #334155 !important;
+        border-radius: 6px !important;
+        color: #F8FAFC !important;
+        font-size: 13px !important;
+        padding: 8px 12px !important;
+        height: 42px !important;
+    }}
+    div[data-testid="stTextInput"] > div > div > input:focus {{
+        border-color: {st.session_state.accent_color} !important;
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
+    }}
+    div[data-testid="stTextInput"] > div > div > input::placeholder {{
+        color: #64748B !important;
+    }}
     </style>
     """,
     unsafe_allow_html=True
@@ -115,15 +131,25 @@ st.markdown(
 def refresh_dashboard():
     st.cache_data.clear()
     st.cache_resource.clear()
-    keys_to_clear = ['filter_case_id', 'filter_region', 'filter_status', 'expanded_rows', 'selected_cases', 'audit_synced']
+    keys_to_clear = ['filter_case_id', 'filter_region', 'filter_status', 'expanded_rows', 'selected_cases', 'audit_synced', 'dashboard_loaded', 'search_case_input']
     for key in keys_to_clear:
         if key in st.session_state: del st.session_state[key]
     st.rerun()
 
-header_col1, header_col2 = st.columns([0.8, 0.2])
+def clear_search_only():
+    """Clear only the search field."""
+    if "search_case_input" in st.session_state:
+        st.session_state.search_case_input = ""
+
+# 🎯 SINGLE ROW HEADER: Title/Status on Left, Actions on Right
+header_col1, header_col2 = st.columns([0.85, 0.15])
+
 with header_col1:
+    # Title and Accent Bar
     st.markdown('<div class="dashboard-title">GCS Prioritization Index</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="accent-bar"></div>', unsafe_allow_html=True)
+    
+    # Pipeline Status Indicator
     launch_time = st.session_state.get("pipeline_launch_time")
     if launch_time:
         current_time = time.time()
@@ -134,28 +160,71 @@ with header_col1:
         else:
             cycle_elapsed = elapsed % (INTERVAL_MINUTES * 60)
             next_run_seconds = (INTERVAL_MINUTES * 60) - cycle_elapsed
-            status_text = "🔄 Next Cycle"
+            status_text = " Next Cycle"
         mins, secs = divmod(int(next_run_seconds), 60)
-        st.markdown(
-            f"""<div style="display: inline-block; background-color: #1E293B; border: 1px solid #334155; border-radius: 6px; padding: 4px 12px; margin-top: 8px; font-size: 0.85rem; color: #94A3B8;">
-                <span style="color: {st.session_state.accent_color}; font-weight: bold;">{status_text}:</span> 
-                Sentiment Pipeline runs in <b>{mins}m {secs}s</b>
-            </div>""", unsafe_allow_html=True)
+       ## st.markdown(
+      ##      f"""<div style="display: inline-block; background-color: #1E293B; border: 1px solid #334155; border-radius: 6px; padding: 4px 12px; margin-top: 8px; font-size: 0.85rem; color: #94A3B8;">
+        ##        <span style="color: {st.session_state.accent_color}; font-weight: bold;">{status_text}:</span> 
+          ##      Sentiment Pipeline runs in <b>{mins}m {secs}s</b>
+            ##</div>""", unsafe_allow_html=True)
 
 with header_col2:
-    if st.button("🔄 Refresh Dashboard", use_container_width=True, type="secondary"):
+    # Vertical spacer to push buttons down to align with the status indicator
+    st.markdown("<br>", unsafe_allow_html=True) 
+    
+    # Clear Search Button (Conditional)
+    if st.session_state.get("search_case_input"):
+        st.button("🔍 Clear Search", use_container_width=True, type="secondary", on_click=clear_search_only)
+        
+    # Refresh Button
+    if st.button("🔄 Refresh", use_container_width=True, type="secondary"):
         refresh_dashboard()
 
 st.divider()
 
 # -------------------------------------------------------
-# 📈 DATA FETCHING, AUDIT SYNC & RENDERING
+#  DATA FETCHING, AUDIT SYNC & RENDERING
 # -------------------------------------------------------
+
+# 🔄 FULL-SCREEN LOADING OVERLAY WITH REAL-TIME PERCENTAGE
+is_initial_load = "dashboard_loaded" not in st.session_state
+loading_overlay = None
+
+def update_overlay(percent, text):
+    """Updates the full-screen overlay with current progress percentage and status text."""
+    if loading_overlay:
+        with loading_overlay:
+            st.markdown(f"""
+                <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; 
+                            background-color: rgba(15, 23, 42, 0.98); z-index: 99999; 
+                            display: flex; justify-content: center; align-items: center; 
+                            flex-direction: column; color: #F8FAFC; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+                    <div style="border: 5px solid #334155; border-top: 5px solid {st.session_state.accent_color}; 
+                                border-radius: 50%; width: 60px; height: 60px; 
+                                animation: spin 1s linear infinite; margin-bottom: 20px;"></div>
+                    <div style="font-size: 22px; font-weight: 700; letter-spacing: -0.5px;">Calculating Index for your Priority ............</div>
+                    <div style="font-size: 14px; color: #94A3B8; margin-top: 8px;">{text}</div>
+                    <div style="width: 300px; height: 8px; background-color: #334155; border-radius: 4px; overflow: hidden; margin-top: 20px;">
+                        <div style="width: {percent}%; height: 100%; background-color: {st.session_state.accent_color}; border-radius: 4px; transition: width 0.5s ease-out;"></div>
+                    </div>
+                    <div style="margin-top: 10px; font-size: 16px; font-weight: 600; color: #94A3B8;">{percent}%</div>
+                </div>
+                <style>
+                    @keyframes spin {{
+                        0% {{ transform: rotate(0deg); }}
+                        100% {{ transform: rotate(360deg); }}
+                    }}
+                </style>
+            """, unsafe_allow_html=True)
+
+if is_initial_load:
+    loading_overlay = st.empty()
+    update_overlay(0, "Preparing to load...")
+
 try:
-    with st.spinner("Loading cases from Salesforce..."):
-        df, cases = get_processed_data()
+    df, cases = get_processed_data(progress_callback=update_overlay)
     
-    # 🔒 AUDIT SYNC: Runs exactly once per data fetch cycle
+    update_overlay(92, "Syncing audit history...")
     if not st.session_state.get("audit_synced"):
         try:
             sync_audit_history(df)
@@ -163,10 +232,18 @@ try:
         except Exception as e:
             st.warning(f"⚠️ Audit sync failed (dashboard still functional): {e}")
     
+    update_overlay(100, "Rendering dashboard...")
+    
+    if loading_overlay:
+        loading_overlay.empty()
+        st.session_state.dashboard_loaded = True
+
     if df.empty:
         st.warning("⚠️ No open cases found for the selected owners.")
     else:
-        filtered_df, active_owners = apply_filters_and_ranking(df)
+        # UPDATED: Unpack the 4th value (is_heal_desk_filter)
+        filtered_df, active_owners, search_query, is_heal_desk_filter = apply_filters_and_ranking(df)
+        
         if filtered_df.empty:
             st.info("ℹ️ No cases match the current filters.")
         else:
@@ -181,14 +258,17 @@ try:
                 try: render_chart(filtered_df)
                 except Exception as e: st.error(f"Chart 1 Error: {e}")
             with chart_col2:
-                try: render_30_day_chart(active_owners)
+                # UPDATED: Pass is_heal_desk_filter to the chart
+                try: render_30_day_chart(active_owners, search_query, is_heal_desk_filter)
                 except Exception as e: st.error(f"Chart 2 Error: {e}")
             st.markdown('</div>', unsafe_allow_html=True)
 
 except Exception as e:
+    if loading_overlay:
+        loading_overlay.empty()
     st.error(f"❌ Critical Error Loading Dashboard: {e}")
     st.exception(e)
     st.stop()
 
 st.divider()
-st.caption("🔄 Dashboard auto-refreshes every 1 Hour directly from Salesforce. Audit history retains 2-day change snapshots.")
+st.caption("🔄 Index auto-refreshes every 1 Hour directly from Salesforce. Audit history retains 2-day change snapshots.")
