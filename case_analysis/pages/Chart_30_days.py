@@ -122,7 +122,7 @@ def get_all_breach_records():
 
 
 def render_30_day_chart(active_owners):
-    st.markdown("<h3 style='color: #F8FAFC; margin-top: 0; margin-bottom: 10px;'>📊 Active SLA Breaches</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 style='color: #F8FAFC; margin-top: 0; margin-bottom: 10px;'>📊 Ongoing SLA Breaches</h3>", unsafe_allow_html=True)
     
     all_breaches_df = get_all_breach_records()
     

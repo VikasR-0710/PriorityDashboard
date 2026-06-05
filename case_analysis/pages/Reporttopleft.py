@@ -462,43 +462,139 @@ def apply_filters_and_ranking(df):
     return filtered, sel_owners if sel_owners else avail_owners
 
 def render_table(filtered_df, cases):
-    st.subheader(":clipboard: Case Monitoring Dashboard")
-    if "sort_column" not in st.session_state: st.session_state.sort_column = None
-    if "sort_asc" not in st.session_state: st.session_state.sort_asc = True
-    report_box = st.container(height=350)
+    st.subheader(":clipboard: Case Priority Index")
+    
+    if "sort_column" not in st.session_state: 
+        st.session_state.sort_column = None
+    if "sort_asc" not in st.session_state: 
+        st.session_state.sort_asc = True
+    
+    # Define column configuration with proper widths and alignment
+    col_config = [
+        ("Region", 0.7, "left"),
+        ("Case", 0.9, "left"),
+        ("Customer", 2.2, "left"),
+        ("Owner", 1.8, "left"),
+        ("Support Level", 1.5, "center"),
+        ("Severity", 0.7, "center"),
+        ("Status", 0.9, "center"),
+        ("Escalated", 0.8, "center"),
+        ("Sentiment", 1.2, "center"),
+        ("Last Comment", 1.5, "left"),
+        ("SLA Deadline", 1.8, "left"),
+        ("SLA Breach Shift", 1.8, "left"),
+        ("Priority", 0.6, "center")
+    ]
+    
+    col_widths = [width for _, width, _ in col_config]
+    col_mapping = {name: df_col for name, _, df_col in [
+        ("Region", 0.7, "Region"),
+        ("Case", 0.9, "Case Number"),
+        ("Customer", 2.2, "Customer Name"),
+        ("Owner", 1.8, "Case Owner"),
+        ("Support Level", 1.5, "Support Level"),
+        ("Severity", 0.7, "Severity"),
+        ("Status", 0.9, "Status"),
+        ("Escalated", 0.8, "Escalated"),
+        ("Sentiment", 1.2, "Sentiment"),
+        ("Last Comment", 1.5, "Last Comment By"),
+        ("SLA Deadline", 1.8, "SLA Response Time"),
+        ("SLA Breach Shift", 1.8, "SLA_Breach_Shift"),
+        ("Priority", 0.6, "Sequential_Rank")
+    ]}
+    
+    report_box = st.container(height=400)
+    
     with report_box:
-        col_widths = [0.8, 1.0, 2.5, 2.0, 1.8, 0.8, 1.0, 0.8, 1.3, 2.0, 1.8, 2.0, 2.0, 1]
-        col_mapping = {"Region": "Region", "Case": "Case Number", "Customer": "Customer Name", "Owner": "Case Owner",
-                       "Support Level": "Support Level", "Severity": "Severity", "Status": "Status", "Escalated": "Escalated",
-                       "Sentiment": "Sentiment", "Last Comment": "Last Comment By", 
-                       ##"Last Time": "Last Customer Comment",
-                       "SLA Deadline": "SLA Response Time", "SLA Breach Shift": "SLA_Breach_Shift", "Priority": "Sequential_Rank"}
+        # Render headers with sort buttons
         headers = st.columns(col_widths)
-        for i, (d_name, df_col) in enumerate(col_mapping.items()):
+        for i, (col_name, width, align) in enumerate(col_config):
+            df_col = col_mapping[col_name]
             icon = " ▲" if st.session_state.sort_column == df_col and st.session_state.sort_asc else " ▼" if st.session_state.sort_column == df_col else ""
-            if headers[i].button(f"{d_name}{icon}", key=f"sort_{df_col}"):
-                if st.session_state.sort_column == df_col: st.session_state.sort_asc = not st.session_state.sort_asc
-                else: st.session_state.sort_column, st.session_state.sort_asc = df_col, True
+            
+            if headers[i].button(f"{col_name}{icon}", key=f"sort_{df_col}", use_container_width=True):
+                if st.session_state.sort_column == df_col:
+                    st.session_state.sort_asc = not st.session_state.sort_asc
+                else:
+                    st.session_state.sort_column, st.session_state.sort_asc = df_col, True
                 st.rerun()
+        
         st.markdown("---")
+        
+        # Prepare sorted dataframe
         display_df = filtered_df.copy()
         if st.session_state.sort_column and st.session_state.sort_column in display_df.columns:
             target = "SLA_Minutes" if st.session_state.sort_column == "SLA Response Time" else st.session_state.sort_column
             display_df = display_df.sort_values(by=target, ascending=st.session_state.sort_asc)
-        for _, row in display_df.iterrows():
+        
+        # Render data rows
+        for idx, row in display_df.iterrows():
             cols = st.columns(col_widths)
-            cols[0].write(row["Region"]); cols[1].write(row["Case Number"]); cols[2].write(row["Customer Name"])
-            cols[3].write(row["Case Owner"]); cols[4].write(row["Support Level"]); cols[5].write(row["Severity"])
-            cols[6].write(row["Status"]); cols[7].write("Yes" if row["Escalated"] else "No")
+            
+            # Region
+            cols[0].markdown(f"<div style='text-align: left; font-size: 11px;'>{row['Region']}</div>", unsafe_allow_html=True)
+            
+            # Case Number
+            cols[1].markdown(f"<div style='text-align: left; font-size: 11px; font-weight: 600;'>{row['Case Number']}</div>", unsafe_allow_html=True)
+            
+            # Customer Name
+            cols[2].markdown(f"<div style='text-align: left; font-size: 11px;'>{row['Customer Name']}</div>", unsafe_allow_html=True)
+            
+            # Owner
+            cols[3].markdown(f"<div style='text-align: left; font-size: 11px;'>{row['Case Owner']}</div>", unsafe_allow_html=True)
+            
+            # Support Level
+            cols[4].markdown(f"<div style='text-align: center; font-size: 11px;'>{row['Support Level']}</div>", unsafe_allow_html=True)
+            
+            # Severity
+            cols[5].markdown(f"<div style='text-align: center; font-size: 11px;'>{row['Severity']}</div>", unsafe_allow_html=True)
+            
+            # Status
+            cols[6].markdown(f"<div style='text-align: center; font-size: 11px;'>{row['Status']}</div>", unsafe_allow_html=True)
+            
+            # Escalated
+            escalated_text = "Yes" if row['Escalated'] else "No"
+            cols[7].markdown(f"<div style='text-align: center; font-size: 11px;'>{escalated_text}</div>", unsafe_allow_html=True)
+            
+            # Sentiment with color coding
             sentiment = row["Sentiment"]
-            if not sentiment or sentiment.strip() == "" or sentiment == "sentiment not available yet": cols[8].info("sentiment not available yet")
+            sentiment_cell = cols[8]
+            if not sentiment or sentiment.strip() == "" or sentiment == "sentiment not available yet":
+                sentiment_cell.info("N/A")
             else:
                 s_low = sentiment.lower()
-                if "positive" in s_low: cols[8].success(sentiment) 
-                elif "neutral" in s_low or "medium" in s_low: cols[8].warning(sentiment) 
-                elif "negative" in s_low or "critical" in s_low: cols[8].error(sentiment)   
-                else: cols[8].info(sentiment)    
-            cols[9].write(row["Last Comment By"]);
-            ##cols[10].write(row["Last Customer Comment"])
-            cols[11].write(row["SLA Response Time"]); cols[12].write(row["SLA_Breach_Shift"])
-            cols[13].markdown(f"<div style='color: #FFFFFF; font-weight: 600; font-size: 14px;'>{row['Sequential_Rank']}</div>", unsafe_allow_html=True)
+                if "positive" in s_low:
+                    sentiment_cell.success(sentiment)
+                elif "neutral" in s_low or "medium" in s_low:
+                    sentiment_cell.warning(sentiment)
+                elif "negative" in s_low or "critical" in s_low:
+                    sentiment_cell.error(sentiment)
+                else:
+                    sentiment_cell.info(sentiment)
+            
+            # Last Comment By
+            cols[9].markdown(f"<div style='text-align: left; font-size: 11px;'>{row['Last Comment By']}</div>", unsafe_allow_html=True)
+            
+            # SLA Response Time
+            sla_text = row['SLA Response Time']
+            sla_cell = cols[10]
+            if "Overdue" in str(sla_text):
+                sla_cell.error(sla_text)
+            elif "Due in" in str(sla_text):
+                sla_cell.warning(sla_text)
+            else:
+                sla_cell.markdown(f"<div style='text-align: left; font-size: 11px;'>{sla_text}</div>", unsafe_allow_html=True)
+            
+            # SLA Breach Shift
+            cols[11].markdown(f"<div style='text-align: left; font-size: 11px;'>{row['SLA_Breach_Shift']}</div>", unsafe_allow_html=True)
+            
+            # Priority/Sequential Rank
+            cols[12].markdown(
+                f"<div style='text-align: center; font-weight: 700; font-size: 13px; "
+                f"color: #FFFFFF; background-color: #FF4B4B; border-radius: 4px; padding: 2px 6px;'>"
+                f"{int(row['Sequential_Rank'])}</div>", 
+                unsafe_allow_html=True
+            )
+            
+            # Add separator between rows
+            st.markdown("<div style='margin: 2px 0; border-bottom: 1px solid #262730;'></div>", unsafe_allow_html=True)

@@ -122,7 +122,7 @@ def refresh_dashboard():
 
 header_col1, header_col2 = st.columns([0.8, 0.2])
 with header_col1:
-    st.markdown('<div class="dashboard-title">GCS Prioritization and Utilization Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="dashboard-title">GCS Prioritization Index</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="accent-bar"></div>', unsafe_allow_html=True)
     launch_time = st.session_state.get("pipeline_launch_time")
     if launch_time:
