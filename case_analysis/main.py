@@ -10,7 +10,7 @@ sys.path.append(os.getcwd())
 # -------------------------------------------------------
 # 🕒 BACKGROUND SCHEDULER (Runs Once Per Session)
 # -------------------------------------------------------
-INITIAL_DELAY_MINUTES = 60
+INITIAL_DELAY_MINUTES = 61
 INTERVAL_MINUTES = 60
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SENTIMENT_SCRIPT_PATH = os.path.join(SCRIPT_DIR, "pages", "Sentiment_analysis.py")

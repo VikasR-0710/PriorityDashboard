@@ -3,12 +3,12 @@ import plotly.graph_objects as go
 
 def render_chart(filtered_df):
     """
-    Renders the Gauge Chart (Utilization Meter) on the right side.
+    Renders the Gauge Chart (Weightage Meter) on the right side.
     Calculates total case score and displays it against a dynamic scale.
     """
     
     # Use markdown for the header to maintain theme consistency instead of default subheader
-    st.markdown("<h3 style='color: #F8FAFC; margin-top: 0; margin-bottom: 10px;'>📊 Utilization Meter</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 style='color: #F8FAFC; margin-top: 0; margin-bottom: 10px;'>📊 Weightage Meter</h3>", unsafe_allow_html=True)
 
     # Calculate total score of all visible cases
     total_score = filtered_df["Case Score"].sum()
