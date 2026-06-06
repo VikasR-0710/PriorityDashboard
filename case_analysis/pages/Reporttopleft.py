@@ -174,6 +174,38 @@ def jump_to_next_business_time(dt):
     next_mon = dt + timedelta(days=days_ahead)
     return next_mon.replace(hour=5, minute=0, second=0, microsecond=0)
 
+def get_standard_business_minutes(dt1, dt2):
+    if dt1 > dt2:
+        return -get_standard_business_minutes(dt2, dt1)
+        
+    current = dt1
+    business_mins = 0
+    
+    while current < dt2:
+        if is_in_weekend_window(current):
+            # If we land in a weekend, jump straight to Monday 5:00 AM IST
+            current = jump_to_next_business_time(current)
+            if current > dt2:
+                break
+        else:
+            # We are in business hours. Find the start of the next weekend.
+            wd = current.weekday()
+            days_ahead = 5 - wd
+            if days_ahead < 0:
+                days_ahead += 7
+                
+            next_weekend_start = current.replace(hour=5, minute=0, second=0, microsecond=0) + timedelta(days=days_ahead)
+            
+            # Catch edge case: If it's Saturday but before 5:00 AM
+            if wd == 5 and current.hour < 5:
+                next_weekend_start = current.replace(hour=5, minute=0, second=0, microsecond=0)
+            
+            step_end = min(dt2, next_weekend_start)
+            business_mins += int((step_end - current).total_seconds() / 60)
+            current = step_end
+            
+    return business_mins
+
 def add_sla_hours_with_weekend_skip(start_dt, hours, support_level):
     if not support_level or "standard" not in support_level.lower():
         return start_dt + timedelta(hours=hours)
@@ -245,7 +277,7 @@ def calculate_sla_deadline(start_time, sla_hours_duration, support_level=None):
     if not start_dt: return None
     return add_sla_hours_with_weekend_skip(start_dt, sla_hours_duration, support_level)
 
-def calculate_sla_variance(deadline):
+def calculate_sla_variance(deadline, support_level=None):
     if not deadline: return "N/A", float('inf')
     try:
         if isinstance(deadline, str):
@@ -255,9 +287,17 @@ def calculate_sla_variance(deadline):
             candidates = [parsed.replace(year=now_ist.year - 1), parsed.replace(year=now_ist.year), parsed.replace(year=now_ist.year + 1)]
             deadline_dt = min([ist.localize(c) for c in candidates], key=lambda d: abs((d - now_ist).total_seconds()))
         else: deadline_dt = deadline
+        
         ist = pytz.timezone("Asia/Kolkata")
-        diff = deadline_dt - datetime.now(ist)
-        total_minutes = int(diff.total_seconds() / 60)
+        now_dt = datetime.now(ist)
+        
+        # Calculate paused business minutes for Standard, else raw time
+        if support_level and "standard" in support_level.lower():
+            total_minutes = get_standard_business_minutes(now_dt, deadline_dt)
+        else:
+            diff = deadline_dt - now_dt
+            total_minutes = int(diff.total_seconds() / 60)
+            
         is_overdue = total_minutes < 0
         abs_mins = abs(total_minutes)
         days, rem = divmod(abs_mins, 1440)
@@ -268,7 +308,8 @@ def calculate_sla_variance(deadline):
         parts.append(f"{mins}m")
         formatted = " ".join(parts)
         return f"🚨 Overdue: {formatted}" if is_overdue else f"⏳ Due in: {formatted}", total_minutes
-    except: return "N/A", float('inf')
+    except Exception as e: 
+        return "N/A", float('inf')
 
 def get_breach_shift(deadline, sla_minutes):
     if not deadline or (isinstance(sla_minutes, (int, float)) and sla_minutes >= 0): return "N/A"
@@ -369,7 +410,7 @@ def get_processed_data(progress_callback=None):
             sla_deadline_dt = calculate_sla_deadline(created_dt, sla_hours, support_level)
                     
         if sla_deadline_dt:
-            sla_text, sla_mins = calculate_sla_variance(sla_deadline_dt)
+            sla_text, sla_mins = calculate_sla_variance(sla_deadline_dt, support_level)
             breach_shift = get_breach_shift(sla_deadline_dt, sla_mins)
         else:
             sla_text, sla_mins = "N/A", float('inf')
@@ -479,7 +520,7 @@ def apply_filters_and_ranking(df):
         regions = sorted(set(OWNER_REGION_MAP.values()) - {"Agent"})
         opts = ["ALL"] + regions
         default = st.session_state.get("selected_regions", ["ALL"])
-        sel = st.multiselect("Region", opts, default=default, key="region_filter", label_visibility="collapsed")
+        sel = st.multiselect("Region", opts, default=default, key="region_filter", label_visibility="collapsed",placeholder="Select Region")
         st.session_state.selected_regions = sel
         
     active_regions = regions if "ALL" in sel else sel
@@ -490,13 +531,13 @@ def apply_filters_and_ranking(df):
         if any(o not in avail_owners for o in cur):
             if "selected_owners" in st.session_state: del st.session_state.selected_owners
             st.rerun()
-        sel_owners = st.multiselect("Owner", avail_owners, default=cur, key="owner_filter", label_visibility="collapsed")
+        sel_owners = st.multiselect("Owner", avail_owners, default=cur, key="owner_filter", label_visibility="collapsed",placeholder="Select Name")
         st.session_state.selected_owners = sel_owners
         
     with c3:
         cats = ["Need Immediate Attention", "Need Secondary Attention"]
         def_sla = st.session_state.get("selected_sla_status", [])
-        sel_sla = st.multiselect("Prioritization", cats, default=def_sla, key="sla_filter", label_visibility="collapsed")
+        sel_sla = st.multiselect("Prioritization", cats, default=def_sla, key="sla_filter", label_visibility="collapsed",placeholder="Know Priority Cases")
         st.session_state.selected_sla_status = sel_sla
         
     with c4:

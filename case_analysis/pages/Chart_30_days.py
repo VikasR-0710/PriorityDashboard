@@ -96,7 +96,9 @@ def get_all_breach_records():
             if not sla_hours: continue
             
             sla_deadline_dt = calculate_sla_deadline(effective_start_dt, sla_hours, support_level)
-            sla_text, sla_mins = calculate_sla_variance(sla_deadline_dt)
+            
+            # UPDATED: Pass support_level to trigger the weekend pause logic!
+            sla_text, sla_mins = calculate_sla_variance(sla_deadline_dt, support_level)
             is_breached = isinstance(sla_mins, (int, float)) and sla_mins < 0
             
             if is_breached:
