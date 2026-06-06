@@ -483,7 +483,6 @@ def apply_filters_and_ranking(df):
         st.session_state.selected_regions = sel
         
     active_regions = regions if "ALL" in sel else sel
-    temp_df = df[df["Region"].isin(active_regions)] if active_regions else df.iloc[:0]
     avail_owners = sorted(o for o, r in OWNER_REGION_MAP.items() if r in active_regions) if active_regions else []
     
     with c2:
@@ -522,11 +521,13 @@ def apply_filters_and_ranking(df):
         for term in search_terms:
             mask = mask | df["Case Number"].astype(str).str.contains(term, case=False, na=False)
         df = df[mask].copy()
-        # Re-apply region filter on searched results
-        if active_regions:
-            df = df[df["Region"].isin(active_regions)]
-    
-    if not active_regions: return df.iloc[:0], [], search_query, False
+        
+    # 🎯 FIX: APPLY REGION FILTER ALWAYS (Moved outside the `if search_terms:` block)
+    if active_regions:
+        df = df[df["Region"].isin(active_regions)].copy()
+        
+    if not active_regions: 
+        return df.iloc[:0], [], search_query, st.session_state.get("heal_desk_toggle", False)
     
     filtered = df[df["Case Owner"].isin(sel_owners)] if sel_owners else df
     
