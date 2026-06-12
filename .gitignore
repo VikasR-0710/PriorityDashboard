@@ -5,3 +5,71 @@ __pycache__/
 idea/
 .vscode/
 case_analysis/config/credentials.json
+
+# ---------------------------------------------------------
+# 🚨 SENSITIVE SECRETS & CREDENTIALS (NEVER COMMIT THESE)
+# ---------------------------------------------------------
+.env
+.env.local
+.env.*.local
+case_analysis/config/credentials.json
+case_analysis/config/delinea_client_secret
+*.pem
+*.key
+
+# ---------------------------------------------------------
+# 🐍 PYTHON ARTIFACTS
+# ---------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ---------------------------------------------------------
+# 🌐 VIRTUAL ENVIRONMENTS
+# ---------------------------------------------------------
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ---------------------------------------------------------
+# 📊 STREAMLIT & APP SPECIFIC
+# ---------------------------------------------------------
+.streamlit/secrets.toml
+/tmp/delinea_token_shared.json
+*.log
+
+# ---------------------------------------------------------
+# 💻 OS & IDE FILES
+# ---------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

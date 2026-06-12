@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import pytz
 
-from case_analysis.pages.Reporttopleft import (
+from case_analysis.pages.CasePriorityIndex import (
     get_sf_connection, OWNER_REGION_MAP, is_generalized_comment,
     get_sla_hours, convert_to_ist_dt, calculate_sla_deadline, calculate_sla_variance,
 )

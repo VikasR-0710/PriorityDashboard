@@ -1,51 +1,41 @@
 import os
 from dotenv import load_dotenv
 import snowflake.connector
+from case_analysis.config.delinea_loader import fetch_snowflake_credentials
 
 load_dotenv()
 
-
-
 class SnowflakeService:
+    def connect(self, warehouse=None, database=None, schema=None):
+        # 1. Try Delinea first
+        creds = fetch_snowflake_credentials()
+        
+        if creds and creds.get("user") and creds.get("password"):
+            user = creds["user"]
+            password = creds["password"]
+            account = creds["account"]
+        else:
+            # 2. Fallback to .env
+            user = os.getenv("SNOWFLAKE_USER")
+            password = os.getenv("SNOWFLAKE_PASSWORD")
+            account = os.getenv("SNOWFLAKE_ACCOUNT")
 
-    def connect(self):
+        if not all([user, password, account]):
+            raise ValueError("Snowflake credentials are missing. Check Delinea or .env file.")
 
-        conn = snowflake.connector.connect(
+        conn_kwargs = {"user": user, "password": password, "account": account}
+        if warehouse: conn_kwargs["warehouse"] = warehouse
+        if database: conn_kwargs["database"] = database
+        if schema: conn_kwargs["schema"] = schema
 
-            user=os.getenv(
-                "SNOWFLAKE_USER"
-            ),
+        return snowflake.connector.connect(**conn_kwargs)
 
-            password=os.getenv(
-                "SNOWFLAKE_PASSWORD"
-            ),
-
-            account=os.getenv(
-                "SNOWFLAKE_ACCOUNT"
-            )
-
-        )
-
-        return conn
-
-
-
-    def execute_query(
-        self,
-        query
-    ):
-
-        conn=self.connect()
-
-        cursor=conn.cursor()
-
+    def execute_query(self, query):
+        conn = self.connect()
+        cursor = conn.cursor()
         try:
-
             cursor.execute(query)
-
             return cursor.fetchall()
-
         finally:
-
             cursor.close()
             conn.close()

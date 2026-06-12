@@ -7,13 +7,13 @@ import math
 import numpy as np
 import pytz
 import os
-import snowflake.connector
 from datetime import datetime, timedelta
 from case_analysis.services.case_service import CaseService
+from case_analysis.services.snowflake_service import SnowflakeService # <-- ADDED IMPORT
 
-# -------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 🔑 CONNECTIONS & CACHING
-# -------------------------------------------------------
+# ---------------------------------------------------------------------------
 @st.cache_resource
 def get_sf_connection():
     service = CaseService()
@@ -21,14 +21,14 @@ def get_sf_connection():
 
 @st.cache_resource
 def get_snowflake_connection():
-    return snowflake.connector.connect(
-        user=os.getenv("SNOWFLAKE_USER"),
-        password=os.getenv("SNOWFLAKE_PASSWORD"),
-        account=os.getenv("SNOWFLAKE_ACCOUNT"),
+    # UPDATED: Now uses the centralized SnowflakeService which handles Delinea
+    sf_service = SnowflakeService()
+    return sf_service.connect(
         warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "GENERALBIZ_WAREHOUSE"),
         database=os.getenv("SNOWFLAKE_DATABASE", "CUSTOMER_SUPPORT_BOT_LOGS"),
         schema=os.getenv("SNOWFLAKE_SCHEMA", "CHAT_DATA")
     )
+
 
 def ensure_audit_table_exists():
     try:
