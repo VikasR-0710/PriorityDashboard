@@ -8,9 +8,19 @@ import streamlit as st
 sys.path.append(os.getcwd())
 
 # -------------------------------------------------------
+# 📦 PAGE CONFIG
+# -------------------------------------------------------
+st.set_page_config(
+    page_title="Prioritization Dashboard",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# -------------------------------------------------------
 # 🕒 BACKGROUND SCHEDULER (Runs Once Per Session)
 # -------------------------------------------------------
-INITIAL_DELAY_MINUTES = 60
+INITIAL_DELAY_MINUTES = 0.5
 INTERVAL_MINUTES = 60
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SENTIMENT_SCRIPT_PATH = os.path.join(SCRIPT_DIR, "pages", "Sentiment_analysis.py")
@@ -54,7 +64,7 @@ def schedule_pipeline():
 schedule_pipeline()
 
 # -------------------------------------------------------
-# 📦 IMPORTS & PAGE CONFIG
+# 📦 IMPORTS
 # -------------------------------------------------------
 try:
     from case_analysis.pages.Reporttopleft import (
@@ -69,13 +79,6 @@ try:
 except ImportError as e:
     st.error(f"❌ Import Error: {e}. Please check your file structure.")
     st.stop()
-
-st.set_page_config(
-    page_title="Prioritization Dashboard", 
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
 
 # -------------------------------------------------------
 # 🎨 UI THEME & CSS

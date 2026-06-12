@@ -9,7 +9,7 @@ import pytz
 import os
 import snowflake.connector
 from datetime import datetime, timedelta
-from services.case_service import CaseService
+from case_analysis.services.case_service import CaseService
 
 # -------------------------------------------------------
 # 🔑 CONNECTIONS & CACHING
@@ -118,17 +118,27 @@ def fetch_snowflake_sentiments():
 def calculate_score(sevone, severity, support_level, escalated, sentiment="", sla_mins=None):
     if sevone: return 35
     if escalated: return 30
+    
     is_overdue = isinstance(sla_mins, (int, float)) and sla_mins < 0
     sentiment_lower = (sentiment or "").lower().strip()
+    
     if not sentiment_lower or sentiment_lower in ["n/a", "none", "null", "sentiment not available yet"]:
         sentiment_category = "not_available"
-    elif "negative" in sentiment_lower or "critical" in sentiment_lower: sentiment_category = "negative"
-    elif "positive" in sentiment_lower: sentiment_category = "positive"
-    else: sentiment_category = "neutral"
+    elif "negative" in sentiment_lower or "critical" in sentiment_lower: 
+        sentiment_category = "negative"
+    elif "positive" in sentiment_lower: 
+        sentiment_category = "positive"
+    else: 
+        sentiment_category = "neutral"
+        
     severity_norm = (severity or "").strip().upper()
-    if severity_norm.startswith("SEV") or severity_norm == "SEVONE": severity_norm = "S1"
-    if severity_norm not in ["S1", "S2", "S3", "S4"]: severity_norm = "S4"
+    if severity_norm.startswith("SEV") or severity_norm == "SEVONE": 
+        severity_norm = "S1"
+    if severity_norm not in ["S1", "S2", "S3", "S4"]: 
+        severity_norm = "S4"
+        
     is_premium = "premium" in (support_level or "").lower() or "plus" in (support_level or "").lower()
+    
     score_map = {
         ("S1", True, "negative", True): 28, ("S1", True, "positive", True): 27, ("S1", True, "neutral", True): 27, ("S1", True, "not_available", True): 27,
         ("S1", True, "negative", False): 26, ("S1", True, "positive", False): 25, ("S1", True, "neutral", False): 25, ("S1", True, "not_available", False): 25,
@@ -147,7 +157,28 @@ def calculate_score(sevone, severity, support_level, escalated, sentiment="", sl
         ("S4", False, "negative", True): 4, ("S4", False, "positive", True): 3, ("S4", False, "neutral", True): 3, ("S4", False, "not_available", True): 3,
         ("S4", False, "negative", False): 2, ("S4", False, "positive", False): 1, ("S4", False, "neutral", False): 1, ("S4", False, "not_available", False): 1,
     }
-    return score_map.get((severity_norm, is_premium, sentiment_category, is_overdue), 0)
+    
+    base_score = score_map.get((severity_norm, is_premium, sentiment_category, is_overdue), 0)
+    
+    # 🎯 FIX: Use minute decimal bonuses. 
+    # Max bonus is 0.5, ensuring it NEVER overrides base severity differences.
+    # S2 (Base 20) will always beat S3 Overdue (Base 15 + Max 0.5 = 15.5).
+    overdue_bonus = 0.0
+    if is_overdue:
+        abs_mins = abs(sla_mins)
+        if abs_mins > 2880:      # Overdue by more than 2 days
+            overdue_bonus = 0.5
+        elif abs_mins > 1440:    # Overdue by more than 1 day
+            overdue_bonus = 0.4
+        elif abs_mins > 720:     # Overdue by more than 12 hours
+            overdue_bonus = 0.3
+        elif abs_mins > 360:     # Overdue by more than 6 hours
+            overdue_bonus = 0.2
+        elif abs_mins > 60:      # Overdue by more than 1 hour
+            overdue_bonus = 0.1
+            
+    final_score = base_score + overdue_bonus
+    return min(final_score, 35)
 
 def get_sla_hours(severity, support_level):
     if not severity or severity == "N/A": return None
@@ -579,7 +610,7 @@ def apply_filters_and_ranking(df):
     
     # 🎯 Apply Prioritization (Top 25/50) ONLY if no specific case search is active.
     if sel_sla and not search_query:
-        filtered = filtered.sort_values(by="Case Score", ascending=False).reset_index(drop=True)
+        filtered = filtered.sort_values(by=["Case Score", "SLA_Minutes"], ascending=[False, True]).reset_index(drop=True)
         rows_to_keep = []
         if "Need Immediate Attention" in sel_sla: rows_to_keep.extend(range(0, min(25, len(filtered))))
         if "Need Secondary Attention" in sel_sla: rows_to_keep.extend(range(25, min(50, len(filtered))))
