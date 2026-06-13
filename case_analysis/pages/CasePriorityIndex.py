@@ -24,7 +24,7 @@ def get_snowflake_connection():
     # UPDATED: Now uses the centralized SnowflakeService which handles Delinea
     sf_service = SnowflakeService()
     return sf_service.connect(
-        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "GENERALBIZ_WAREHOUSE"),
+        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "CS_BOT_WH"),
         database=os.getenv("SNOWFLAKE_DATABASE", "CUSTOMER_SUPPORT_BOT_LOGS"),
         schema=os.getenv("SNOWFLAKE_SCHEMA", "CHAT_DATA")
     )
@@ -81,26 +81,32 @@ def inject_custom_css():
     }
 </style>""", unsafe_allow_html=True)
 
-OWNER_REGION_MAP = {
-    "Sakthi Devi SK": "APAC", "Mohamed Ramzin": "APAC", "Syeda Sajida": "APAC", "Yogesh R": "APAC", 
-    "Ganesh Babu": "APAC", "Srinivas Aaguri": "APAC", "Sindhu M Y": "EMEA", "Payal Gupta": "EMEA", 
-    "Poonam Pandey": "EMEA", "Mugilan Gowthaman": "EMEA", "Santosh Veduruvada": "EMEA", 
-    "Sivagnana Bharathi Nagaraj": "EMEA", "Ullas Shenoy": "EMEA", "Vipul S G": "EMEA", 
-    "Vilas Potadar": "EMEA", "Chethan Kumara P": "EMEA", "Chandra Sai Surya Santosh Veduruvada": "EMEA",
-    "Aqsa Pandith": "NA EAST", "Prabu R": "NA EAST", "Vikas R": "NA EAST", "Tarun Buthala": "NA EAST", 
-    "Gnanasiri Pechetti": "NA EAST", "Shivendra Yadav": "NA EAST", "Kaushik Patowary": "NA EAST", 
-    "Shahrukh Shahzad": "NA EAST", "Amit Bhojak": "NA EAST", "Mohammed Usman": "NA EAST", 
-    "Santi Sahoo": "NA EAST", "Nilanjan Roy": "NA EAST", "Nupur Rao": "NA EAST", 
-    "Rohit Nargundkar": "NA EAST", "Prabu Rajendran": "NA EAST", "Palak Kharche": "NA EAST", 
-    "Pooja Singh": "NA EAST", "Becca Lozano": "NA EAST", "Selvin Raja": "NA WEST", 
-    "Shakti Prasad Pati": "NA WEST", "Sanjay Kademani": "NA WEST", "Shreyas G Nambiar": "NA WEST", 
-    "Vishal Mavi": "NA WEST", "Infant Raj.": "NA WEST", "Pallavi M R": "NA WEST", 
-    "Aniket Chinde": "NA WEST", "Kalyan Kumar": "NA WEST", "Amit Kumar": "NA WEST", 
-    "Karthik Dosapati": "NA WEST", "Peter Kyller": "NA WEST", "ZAREENA BANO": "NA WEST", 
-    "Karalie Murray": "NA WEST", "Sushmitha Rayalkeri": "P+", "Amith Gujjar": "P+", 
-    "Monika Sihag": "P+", "Mohammad Raza": "P+", "Sumit Paul": "P+", "Imari Killikelly": "P+", 
-    "Merlyn Pushparaj": "P+","Joshua Halle": "P+", "Naveen Kumar Surisetti": "P+", "Xactly Support Agent": "Agent"
-}
+@st.cache_data(ttl=3600)
+def fetch_owner_config():
+    try:
+        conn = get_snowflake_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT name, COALESCE(region, 'UNKNOWN') AS region
+            FROM DBD_OWNER_DATA
+            WHERE name IS NOT NULL
+            ORDER BY id, name
+        """)
+        rows = cursor.fetchall()
+        cursor.close()
+        return {name: region for name, region in rows if name}
+    except Exception as e:
+        print(f"❌ Owner data fetch failed: {e}")
+        return {}
+
+def get_owner_region_map():
+    return fetch_owner_config()
+
+def build_owner_name_filter(owner_names):
+    safe_names = [name.replace("\\", "\\\\").replace("'", "\\'") for name in owner_names if name]
+    if not safe_names:
+        raise ValueError("No owner names found in DBD_OWNER_DATA.")
+    return "'" + "', '".join(safe_names) + "'"
 
 @st.cache_data(ttl=3600)
 def fetch_snowflake_sentiments():
@@ -264,24 +270,13 @@ def get_project_support(project_id):
 
 def fetch_cases():
     sf = get_sf_connection()
-    query = """
+    owner_names_str = build_owner_name_filter(get_owner_region_map().keys())
+    query = f"""
         SELECT Id, CaseNumber, Subject, Status, Owner.Name, Account.Name, AccountName__c,
             Support_Level__c, Severity__c, Sevone__c, IsEscalated, CreatedDate, ClosedDate, Heal_Desk__c,
             (select CommentBody, CreatedBy.Name, CreatedDate, IsPublished from CaseComments where IsPublished=true order by CreatedDate Desc)
         FROM Case
-        WHERE Status IN ('New', 'Open', 'Assigned') and Owner.Name IN (
-            'Amit Bhojak', 'Amit Kumar', 'Amith Gujjar', 'Aniket Chinde', 'Aqsa Pandith', 'Becca Lozano',
-            'Chethan Kumara P', 'Ganesh Babu', 'Gnanasiri Pechetti', 'Imari Killikelly', 'Infant Raj.', 
-            'Ishaq Mathina', 'Kalyan Kumar', 'Karalie Murray', 'Karthik Dosapati', 'Kaushik Patowary', 
-            'Mahesh P M', 'Merlyn Pushparaj', 'Mohamed Ramzin', 'Mohammad Raza', 'Mohammed Usman', 
-            'Monika Sihag', 'Mugilan Gowthaman', 'Naveen Kumar Surisetti', 'Nilanjan Roy', 'Nupur Rao', 
-            'Palak Kharche', 'Pallavi M R', 'Payal Gupta', 'Peter Kyller', 'Pooja Singh', 'Poonam Pandey',
-            'Prabu Rajendran', 'Prabu R', 'Rohit Nargundkar', 'Sakthi Devi SK', 'Sanjay Kademani',
-            'Chandra Sai Surya Santosh Veduruvada', 'Santi Sahoo', 'Selvin Raja', 'Shahrukh Shahzad', 
-            'Shakti Prasad Pati', 'Shreyas G Nambiar', 'Shivendra Yadav', 'Sindhu M Y', 
-            'Sivagnana Bharathi Nagaraj', 'Sivaji Koya', 'Srinivas Aaguri', 'Sumit Paul', 'Sumit', 
-            'Sushmitha Rayalkeri', 'Syeda Sajida', 'Tarun Buthala', 'Ullas Shenoy', 'Vikas R', 
-            'Vilas Potadar', 'Vipul S G', 'Vishal Mavi', 'Yogesh R', 'Zareena Bano', 'Zareena','Joshua Halle')"""
+        WHERE Status IN ('New', 'Open', 'Assigned') and Owner.Name IN ({owner_names_str})"""
     return sf.query_all(query)["records"]
 
 def convert_to_ist(date_string):
@@ -383,6 +378,7 @@ def get_processed_data(progress_callback=None):
         
     dashboard = []
     total_cases = len(cases)
+    owner_region_map = get_owner_region_map()
 
     for i, case in enumerate(cases):
         if not case: continue
@@ -414,7 +410,7 @@ def get_processed_data(progress_callback=None):
         if comments:
             latest = comments[0]
             created_by = (latest.get("CreatedBy") or {}).get("Name", "")
-            last_commenter = "Support Comment" if created_by in OWNER_REGION_MAP else "Customer Comment"
+            last_commenter = "Support Comment" if created_by in owner_region_map else "Customer Comment"
             if last_commenter == "Support Comment":
                 if is_generalized_comment(latest.get("CommentBody", "")):
                     last_commenter = "Support Comment (Generalized)"
@@ -428,7 +424,7 @@ def get_processed_data(progress_callback=None):
             latest = comments[0]
             latest_author = (latest.get("CreatedBy") or {}).get("Name", "")
             
-            latest_is_support = latest_author in OWNER_REGION_MAP
+            latest_is_support = latest_author in owner_region_map
             latest_is_gen = is_generalized_comment(latest.get("CommentBody", ""))
 
             if latest_is_support and not latest_is_gen:
@@ -458,7 +454,7 @@ def get_processed_data(progress_callback=None):
         is_heal_desk = bool(case.get("Heal_Desk__c"))
 
         dashboard.append({
-            "Region": OWNER_REGION_MAP.get(owner_name, "UNKNOWN"), "Case Number": case.get("CaseNumber", "N/A"),
+            "Region": owner_region_map.get(owner_name, "UNKNOWN"), "Case Number": case.get("CaseNumber", "N/A"),
             "Customer Name": customer_name, "Case Owner": owner_name, "Support Level": support_level,
             "Severity": severity, "Status": case.get("Status", "N/A"), "Escalated": escalated,
             "Last Comment By": last_commenter, "Sentiment": sentiment, "Case Score": case_score,
@@ -546,16 +542,17 @@ def clear_search():
 def apply_filters_and_ranking(df):
     # 🎯 Compact 4-column layout for perfect alignment
     c1, c2, c3, c4 = st.columns([1.0, 1.0, 1.0, 1.0])
+    owner_region_map = get_owner_region_map()
     
     with c1:
-        regions = sorted(set(OWNER_REGION_MAP.values()) - {"Agent"})
+        regions = sorted(set(owner_region_map.values()) - {"Agent"})
         opts = ["ALL"] + regions
         default = st.session_state.get("selected_regions", ["ALL"])
         sel = st.multiselect("Region", opts, default=default, key="region_filter", label_visibility="collapsed",placeholder="Select Region")
         st.session_state.selected_regions = sel
         
     active_regions = regions if "ALL" in sel else sel
-    avail_owners = sorted(o for o, r in OWNER_REGION_MAP.items() if r in active_regions) if active_regions else []
+    avail_owners = sorted(o for o, r in owner_region_map.items() if r in active_regions) if active_regions else []
     
     with c2:
         cur = st.session_state.get("selected_owners", [])

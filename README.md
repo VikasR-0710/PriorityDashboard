@@ -4,7 +4,7 @@ Streamlit dashboard for prioritizing open Salesforce support cases. The app pull
 
 ## What This App Does
 
-- Pulls Salesforce cases with status `New`, `Open`, or `Assigned` for a fixed owner list.
+- Pulls Salesforce cases with status `New`, `Open`, or `Assigned` for owners configured in Snowflake table `DBD_OWNER_DATA`.
 - Calculates a case priority score from severity, support tier, escalation state, SLA state, SEV1 flags, and sentiment.
 - Displays the priority table with region, owner, customer, SLA, sentiment, and ranking fields.
 - Supports dashboard filters for region, owner, prioritization tier, case-number search, and Heal Desk cases.
@@ -197,7 +197,7 @@ SNOWFLAKE_SCHEMA
 Defaults used by the app:
 
 ```text
-SNOWFLAKE_WAREHOUSE=GENERALBIZ_WAREHOUSE
+SNOWFLAKE_WAREHOUSE=CS_BOT_WH
 SNOWFLAKE_DATABASE=CUSTOMER_SUPPORT_BOT_LOGS
 SNOWFLAKE_SCHEMA=CHAT_DATA
 ```
@@ -229,7 +229,7 @@ SALESFORCE_DOMAIN=login
 SNOWFLAKE_USER=your_snowflake_user
 SNOWFLAKE_PASSWORD=your_snowflake_password
 SNOWFLAKE_ACCOUNT=your_snowflake_account
-SNOWFLAKE_WAREHOUSE=GENERALBIZ_WAREHOUSE
+SNOWFLAKE_WAREHOUSE=CS_BOT_WH
 SNOWFLAKE_DATABASE=CUSTOMER_SUPPORT_BOT_LOGS
 SNOWFLAKE_SCHEMA=CHAT_DATA
 
@@ -274,7 +274,39 @@ Status IN ('New', 'Open', 'Assigned')
 AND Owner.Name IN (...)
 ```
 
-The owner list is hardcoded in the query and mapped to regions in `OWNER_REGION_MAP`.
+The owner list and region mapping come from Snowflake table `DBD_OWNER_DATA`, not from hardcoded Python lists.
+
+Expected table shape:
+
+```text
+DBD_OWNER_DATA
+├── id
+├── name
+└── region
+```
+
+Owner config is loaded in `fetch_owner_config()`:
+
+```sql
+SELECT name, COALESCE(region, 'UNKNOWN') AS region
+FROM DBD_OWNER_DATA
+WHERE name IS NOT NULL
+ORDER BY id, name
+```
+
+The returned mapping is used for:
+
+- Salesforce `Owner.Name IN (...)` filters.
+- Dashboard `Region` column.
+- Region dropdown.
+- Owner dropdown.
+- Detecting whether a latest comment was made by a support owner.
+
+The same owner table is used by:
+
+- `case_analysis/pages/CasePriorityIndex.py`
+- `case_analysis/pages/Sentiment_analysis.py`
+- `case_analysis/pages/OngoingSLABreaches.py`
 
 ## Heal Desk Cases
 
@@ -437,6 +469,22 @@ Behavior:
 The scheduler runs in a daemon thread, so it stops when the Streamlit process stops.
 
 ## Snowflake Tables
+
+Owner config table:
+
+```text
+DBD_OWNER_DATA
+```
+
+Expected columns:
+
+```text
+id
+name
+region
+```
+
+This table controls which Salesforce owners are queried and how each owner maps to a dashboard region.
 
 Sentiment table:
 
@@ -664,7 +712,7 @@ Check:
 
 ## Current Known Implementation Notes
 
-- Salesforce owner lists are hardcoded in multiple files.
+- Salesforce owner names and regions are loaded from `DBD_OWNER_DATA`.
 - Sentiment uses Chat Completions, not the Responses API.
 - The dashboard reads sentiment from Snowflake; it does not call OpenAI directly.
 - The sentiment scheduler runs per Streamlit session.

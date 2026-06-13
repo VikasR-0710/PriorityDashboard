@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from case_analysis.services.case_service import CaseService
 from case_analysis.services.openai_service import OpenAIService
 from case_analysis.services.snowflake_service import SnowflakeService
+from case_analysis.pages.CasePriorityIndex import get_owner_region_map, build_owner_name_filter
 
 # ---------------------------------------------------------------------------
 # 🛠️ CONFIGURATION (Environment Variables)
@@ -49,7 +50,7 @@ MODEL_PRICING_PER_1M = {
 def get_pipeline_snowflake_connection():
     sf_service = SnowflakeService()
     return sf_service.connect(
-        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "GENERALBIZ_WAREHOUSE"),
+        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "CS_BOT_WH"),
         database=os.getenv("SNOWFLAKE_DATABASE", "CUSTOMER_SUPPORT_BOT_LOGS"),
         schema=os.getenv("SNOWFLAKE_SCHEMA", "CHAT_DATA")
     )
@@ -373,25 +374,13 @@ def fetch_salesforce_cases():
     print("🔌 Connecting to Salesforce...")
     service = CaseService()
     sf = service.get_connection()
-    query = """
+    owner_names_str = build_owner_name_filter(get_owner_region_map().keys())
+    query = f"""
     SELECT Id, CaseNumber, Subject, Status, Owner.Name, Account.Name,
     Severity__c, Support_Level__c, IsEscalated,
     (select CommentBody, CreatedBy.Name, CreatedDate from CaseComments where IsPublished=true order by CreatedDate Desc)
     FROM Case
-    WHERE Status IN ('New', 'Open', 'Assigned') and Owner.Name IN (
-    'Amit Bhojak', 'Amit Kumar', 'Amith Gujjar', 'Aniket Chinde', 'Aqsa Pandith', 'Becca Lozano',
-    'Chethan Kumara P', 'Ganesh Babu', 'Gnanasiri Pechetti', 'Imari Killikelly', 'Infant Raj.',
-    'Ishaq Mathina', 'Kalyan Kumar', 'Karalie Murray', 'Karthik Dosapati', 'Kaushik Patowary',
-    'Mahesh P M', 'Merlyn Pushparaj', 'Mohamed Ramzin', 'Mohammad Raza', 'Mohammed Usman',
-    'Monika Sihag', 'Mugilan Gowthaman', 'Naveen Kumar Surisetti', 'Nilanjan Roy', 'Nupur Rao',
-    'Palak Kharche', 'Pallavi M R', 'Payal Gupta', 'Peter Kyller', 'Pooja Singh', 'Poonam Pandey',
-    'Prabu Rajendran', 'Prabu R', 'Rohit Nargundkar', 'Sakthi Devi SK', 'Sanjay Kademani',
-    'Chandra Sai Surya Santosh Veduruvada', 'Santi Sahoo', 'Selvin Raja', 'Shahrukh Shahzad',
-    'Shakti Prasad Pati', 'Shreyas G Nambiar', 'Shivendra Yadav', 'Sindhu M Y',
-    'Sivagnana Bharathi Nagaraj', 'Sivaji Koya', 'Srinivas Aaguri', 'Sumit Paul', 'Sumit',
-    'Sushmitha Rayalkeri', 'Syeda Sajida', 'Tarun Buthala', 'Ullas Shenoy', 'Vikas R',
-    'Vilas Potadar', 'Vipul S G', 'Vishal Mavi', 'Yogesh R', 'Zareena Bano', 'Zareena','Joshua Halle'
-    )
+    WHERE Status IN ('New', 'Open', 'Assigned') and Owner.Name IN ({owner_names_str})
     """
     print("📥 Fetching cases...")
     return sf.query_all(query)["records"]

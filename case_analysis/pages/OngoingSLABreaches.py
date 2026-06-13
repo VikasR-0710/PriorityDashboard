@@ -5,35 +5,20 @@ from datetime import datetime, timedelta
 import pytz
 
 from case_analysis.pages.CasePriorityIndex import (
-    get_sf_connection, OWNER_REGION_MAP, is_generalized_comment,
+    get_sf_connection, get_owner_region_map, build_owner_name_filter, is_generalized_comment,
     get_sla_hours, convert_to_ist_dt, calculate_sla_deadline, calculate_sla_variance,
 )
-
-OWNER_LIST = [
-    'Amit Bhojak', 'Amit Kumar', 'Amith Gujjar', 'Aniket Chinde',
-    'Aqsa Pandith', 'Becca Lozano', 'Chethan Kumara P', 'Ganesh Babu',
-    'Gnanasiri Pechetti', 'Imari Killikelly', 'Infant Raj.', 'Ishaq Mathina', 
-    'Kalyan Kumar', 'Karalie Murray', 'Karthik Dosapati', 'Kaushik Patowary', 'Mahesh P M',
-    'Merlyn Pushparaj', 'Mohamed Ramzin', 'Mohammad Raza', 'Mohammed Usman', 'Monika Sihag',
-    'Mugilan Gowthaman', 'Naveen Kumar Surisetti', 'Nilanjan Roy', 'Nupur Rao', 'Palak Kharche',
-    'Pallavi M R', 'Payal Gupta', 'Peter Kyller', 'Pooja Singh', 'Poonam Pandey',
-    'Prabu Rajendran', 'Prabu R', 'Rohit Nargundkar', 'Sakthi Devi SK', 'Sanjay Kademani',
-    'Chandra Sai Surya Santosh Veduruvada', 'Santi Sahoo', 'Selvin Raja', 'Shahrukh Shahzad', 'Shakti Prasad Pati',
-    'Shreyas G Nambiar', 'Shivendra Yadav', 'Sindhu M Y', 'Sivagnana Bharathi Nagaraj', 'Sivaji Koya',
-    'Srinivas Aaguri', 'Sumit Paul', 'Sumit', 'Sushmitha Rayalkeri', 'Syeda Sajida',
-    'Tarun Buthala', 'Ullas Shenoy', 'Vikas R', 'Vilas Potadar', 'Vipul S G',
-    'Vishal Mavi', 'Yogesh R', 'Zareena Bano', 'Zareena','Joshua Halle'
-]
 
 @st.cache_data(ttl=3600)
 def get_all_breach_records():
     sf = get_sf_connection()
-    owner_names_str = "', '".join(OWNER_LIST)
+    owner_region_map = get_owner_region_map()
+    owner_names_str = build_owner_name_filter(owner_region_map.keys())
     
     # UPDATED: Added Heal_Desk__c to the query
     query = f"""SELECT Id, CaseNumber, Subject, Owner.Name, Account.Name, Support_Level__c, Severity__c, CreatedDate, Heal_Desk__c,
                (SELECT CommentBody, CreatedBy.Name, CreatedDate, IsPublished FROM CaseComments WHERE IsPublished=true ORDER BY CreatedDate DESC)
-        FROM Case WHERE Owner.Name IN ('{owner_names_str}')
+        FROM Case WHERE Owner.Name IN ({owner_names_str})
           AND Status IN ('New', 'Open', 'Assigned') AND Severity__c != null"""
     
     try:
@@ -81,7 +66,7 @@ def get_all_breach_records():
                 latest = comments[0]
                 latest_author = (latest.get('CreatedBy') or {}).get('Name', '')
                 
-                latest_is_support = latest_author in OWNER_REGION_MAP
+                latest_is_support = latest_author in owner_region_map
                 latest_is_gen = is_generalized_comment(latest.get('CommentBody', ''))
                 
                 if latest_is_support and not latest_is_gen:

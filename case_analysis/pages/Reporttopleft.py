@@ -24,7 +24,7 @@ def get_snowflake_connection():
     # UPDATED: Now uses the centralized SnowflakeService which handles Delinea
     sf_service = SnowflakeService()
     return sf_service.connect(
-        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "GENERALBIZ_WAREHOUSE"),
+        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "CS_BOT_WH"),
         database=os.getenv("SNOWFLAKE_DATABASE", "CUSTOMER_SUPPORT_BOT_LOGS"),
         schema=os.getenv("SNOWFLAKE_SCHEMA", "CHAT_DATA")
     )
