@@ -11,7 +11,7 @@ Streamlit dashboard for prioritizing open Salesforce support cases. The app pull
 - Shows a weightage meter for visible cases.
 - Shows ongoing SLA breach trends by support tier.
 - Reads AI sentiment from Snowflake table `DBD_SENTIMENT_DATA`.
-- Writes case audit snapshots into Snowflake table `CASE_AUDIT_HISTORY`.
+- Writes case audit snapshots into Snowflake table `DBD_CASE_AUDIT_HISTORY`.
 - Runs a background sentiment pipeline from `case_analysis/pages/Sentiment_analysis.py`.
 
 ## Project Structure
@@ -454,7 +454,7 @@ Sentiment
 Audit table:
 
 ```text
-CASE_AUDIT_HISTORY
+DBD_CASE_AUDIT_HISTORY
 ```
 
 Created automatically if missing:
@@ -473,7 +473,7 @@ DATA_HASH
 The audit table retention is configured to 2 days:
 
 ```sql
-ALTER TABLE CASE_AUDIT_HISTORY SET DATA_RETENTION_TIME_IN_DAYS = 2
+ALTER TABLE DBD_CASE_AUDIT_HISTORY SET DATA_RETENTION_TIME_IN_DAYS = 2
 ```
 
 ## Dashboard Filters
@@ -643,7 +643,7 @@ Check:
 - Delinea Snowflake secret is accessible.
 - Fallback variables exist in `.env`.
 - Warehouse, database, and schema are correct.
-- User has access to `DBD_SENTIMENT_DATA` and `CASE_AUDIT_HISTORY`.
+- User has access to `DBD_SENTIMENT_DATA` and `DBD_CASE_AUDIT_HISTORY`.
 
 ### OpenAI Sentiment Errors
 
