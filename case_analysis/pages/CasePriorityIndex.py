@@ -260,6 +260,53 @@ def add_sla_hours_with_weekend_skip(start_dt, hours, support_level):
     return current
 
 @st.cache_data(ttl=3600)
+def get_case_due_date_field():
+    try:
+        sf = get_sf_connection()
+        fields = sf.Case.describe().get("fields", [])
+        field_names = {field.get("name") for field in fields}
+        for candidate in ("Due_Date__c", "DueDate__c", "Due_Date_Time__c", "DueDateTime__c", "DueDate"):
+            if candidate in field_names:
+                return candidate
+        for field in fields:
+            label = (field.get("label") or "").strip().lower()
+            if label in ("due date", "due date/time", "due datetime"):
+                return field.get("name")
+    except Exception as e:
+        print(f"⚠️ Case due date field lookup failed: {e}")
+    return None
+
+def get_due_date_sla_start_dt(due_date_value, support_level=None):
+    if not due_date_value or due_date_value == "N/A":
+        return None
+
+    ist = pytz.timezone("Asia/Kolkata")
+    due_date_ist = None
+
+    if isinstance(due_date_value, datetime):
+        due_date_ist = due_date_value.astimezone(ist) if due_date_value.tzinfo else ist.localize(due_date_value)
+    else:
+        due_date_text = str(due_date_value).strip()
+        due_date_ist = convert_to_ist_dt(due_date_text)
+
+        if due_date_ist is None:
+            try:
+                parsed_date = datetime.strptime(due_date_text, "%Y-%m-%d")
+                due_date_ist = ist.localize(parsed_date)
+            except Exception:
+                return None
+
+    return (due_date_ist + timedelta(days=1)).replace(hour=6, minute=0, second=0, microsecond=0)
+
+def apply_due_date_sla_gate(start_dt, due_date_value, support_level=None):
+    due_date_sla_start = get_due_date_sla_start_dt(due_date_value, support_level)
+    if not due_date_sla_start:
+        return start_dt
+    if not start_dt:
+        return due_date_sla_start
+    return max(start_dt, due_date_sla_start)
+
+@st.cache_data(ttl=3600)
 def get_project_support(project_id):
     sf = get_sf_connection()
     acc_res = sf.query(f"SELECT Name FROM Account WHERE Id='{project_id}' LIMIT 1")
@@ -271,9 +318,11 @@ def get_project_support(project_id):
 def fetch_cases():
     sf = get_sf_connection()
     owner_names_str = build_owner_name_filter(get_owner_region_map().keys())
+    due_date_field = get_case_due_date_field()
+    due_date_select = f", {due_date_field}" if due_date_field else ""
     query = f"""
         SELECT Id, CaseNumber, Subject, Status, Owner.Name, Account.Name, AccountName__c,
-            Support_Level__c, Severity__c, Sevone__c, IsEscalated, CreatedDate, ClosedDate, Heal_Desk__c,
+            Support_Level__c, Severity__c, Sevone__c, IsEscalated, CreatedDate, ClosedDate, Heal_Desk__c{due_date_select},
             (select CommentBody, CreatedBy.Name, CreatedDate, IsPublished from CaseComments where IsPublished=true order by CreatedDate Desc)
         FROM Case
         WHERE Status IN ('New', 'Open', 'Assigned') and Owner.Name IN ({owner_names_str})"""
@@ -303,7 +352,7 @@ def calculate_sla_deadline(start_time, sla_hours_duration, support_level=None):
     if not start_dt: return None
     return add_sla_hours_with_weekend_skip(start_dt, sla_hours_duration, support_level)
 
-def calculate_sla_variance(deadline, support_level=None):
+def calculate_sla_variance(deadline, support_level=None, sla_start_time=None):
     if not deadline: return "N/A", float('inf')
     try:
         if isinstance(deadline, str):
@@ -316,9 +365,11 @@ def calculate_sla_variance(deadline, support_level=None):
         
         ist = pytz.timezone("Asia/Kolkata")
         now_dt = datetime.now(ist)
+        start_dt = sla_start_time if isinstance(sla_start_time, datetime) else convert_to_ist_dt(sla_start_time)
         
-        # Calculate paused business minutes for Standard, else raw time
-        if support_level and "standard" in support_level.lower():
+        if start_dt and now_dt < start_dt:
+            total_minutes = int((deadline_dt - now_dt).total_seconds() / 60)
+        elif support_level and "standard" in support_level.lower():
             total_minutes = get_standard_business_minutes(now_dt, deadline_dt)
         else:
             diff = deadline_dt - now_dt
@@ -379,6 +430,7 @@ def get_processed_data(progress_callback=None):
     dashboard = []
     total_cases = len(cases)
     owner_region_map = get_owner_region_map()
+    due_date_field = get_case_due_date_field()
 
     for i, case in enumerate(cases):
         if not case: continue
@@ -391,6 +443,7 @@ def get_processed_data(progress_callback=None):
         customer_name = (case.get("Account") or {}).get("Name", "N/A")
         support_level = case.get("Support_Level__c") or "N/A"
         project_id = case.get("AccountName__c")
+        due_date_value = case.get(due_date_field) if due_date_field else None
         
         if customer_name != "N/A" and "Xactly" in customer_name and project_id:
             try:
@@ -431,13 +484,15 @@ def get_processed_data(progress_callback=None):
                 sla_start_dt = convert_to_ist_dt(latest.get("CreatedDate"))
 
         effective_start_dt = sla_start_dt if sla_start_dt else last_customer_comment_dt
+        effective_start_dt = apply_due_date_sla_gate(effective_start_dt, due_date_value, support_level)
         sla_deadline_dt = calculate_sla_deadline(effective_start_dt, sla_hours, support_level)
         if sla_deadline_dt is None:
             created_dt = convert_to_ist_dt(case.get("CreatedDate"))
+            created_dt = apply_due_date_sla_gate(created_dt, due_date_value, support_level)
             sla_deadline_dt = calculate_sla_deadline(created_dt, sla_hours, support_level)
                     
         if sla_deadline_dt:
-            sla_text, sla_mins = calculate_sla_variance(sla_deadline_dt, support_level)
+            sla_text, sla_mins = calculate_sla_variance(sla_deadline_dt, support_level, effective_start_dt)
             breach_shift = get_breach_shift(sla_deadline_dt, sla_mins)
         else:
             sla_text, sla_mins = "N/A", float('inf')

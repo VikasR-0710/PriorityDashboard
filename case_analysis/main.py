@@ -4,6 +4,8 @@ import threading
 import time
 import importlib.util
 import streamlit as st
+import pytz
+from datetime import datetime, timedelta
 
 sys.path.append(os.getcwd())
 
@@ -75,10 +77,47 @@ try:
         sync_audit_history
     )
     from case_analysis.pages.WeightageMeter import render_chart
-    from case_analysis.pages.OngoingSLABreaches import render_30_day_chart
+    from case_analysis.pages.OngoingSLABreaches import render_30_day_chart, sync_sla_breach_impact_history
 except ImportError as e:
     st.error(f"❌ Import Error: {e}. Please check your file structure.")
     st.stop()
+
+# -------------------------------------------------------
+# 📉 SLA BREACH IMPACT SCHEDULER
+# -------------------------------------------------------
+SLA_IMPACT_RUN_HOUR_IST = 18
+
+def _seconds_until_next_sla_impact_run():
+    ist = pytz.timezone("Asia/Kolkata")
+    now_ist = datetime.now(ist)
+    target = now_ist.replace(hour=SLA_IMPACT_RUN_HOUR_IST, minute=0, second=0, microsecond=0)
+    if now_ist >= target:
+        target += timedelta(days=1)
+    return max(60, int((target - now_ist).total_seconds()))
+
+def _run_sla_breach_impact_loop():
+    while True:
+        sleep_seconds = _seconds_until_next_sla_impact_run()
+        print(f"⏳ SLA breach impact scheduler: waiting {sleep_seconds // 60} minutes until 6 PM IST run.")
+        time.sleep(sleep_seconds)
+        try:
+            print("🚀 Executing daily SLA breach impact sync...")
+            current_df, _ = get_processed_data()
+            sync_sla_breach_impact_history(current_df)
+            print("✅ Daily SLA breach impact sync completed.")
+        except Exception as e:
+            print(f"❌ Daily SLA breach impact sync failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+def schedule_sla_breach_impact_pipeline():
+    if st.session_state.get("sla_breach_impact_scheduler_scheduled", False):
+        return
+    st.session_state.sla_breach_impact_scheduler_scheduled = True
+    thread = threading.Thread(target=_run_sla_breach_impact_loop, daemon=True)
+    thread.start()
+
+schedule_sla_breach_impact_pipeline()
 
 # -------------------------------------------------------
 # 🎨 UI THEME & CSS
@@ -234,6 +273,14 @@ try:
             st.session_state.audit_synced = True
         except Exception as e:
             st.warning(f"⚠️ Audit sync failed (dashboard still functional): {e}")
+
+    update_overlay(95, "Syncing SLA breach impact...")
+    if not st.session_state.get("sla_breach_impact_synced"):
+        try:
+            sync_sla_breach_impact_history(df)
+            st.session_state.sla_breach_impact_synced = True
+        except Exception as e:
+            st.warning(f"⚠️ SLA breach impact sync failed (dashboard still functional): {e}")
     
     update_overlay(100, "Rendering dashboard...")
     

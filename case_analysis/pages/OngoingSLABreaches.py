@@ -1,22 +1,29 @@
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
+import time
 from datetime import datetime, timedelta
 import pytz
 
 from case_analysis.pages.CasePriorityIndex import (
     get_sf_connection, get_owner_region_map, build_owner_name_filter, is_generalized_comment,
     get_sla_hours, convert_to_ist_dt, calculate_sla_deadline, calculate_sla_variance,
+    get_case_due_date_field, apply_due_date_sla_gate, get_snowflake_connection,
 )
+
+SLA_BREACH_IMPACT_TABLE = "DBD_SLA_BREACH_IMPACT"
+ACTIVE_CASE_STATUSES = {"New", "Open", "Assigned"}
 
 @st.cache_data(ttl=3600)
 def get_all_breach_records():
     sf = get_sf_connection()
     owner_region_map = get_owner_region_map()
     owner_names_str = build_owner_name_filter(owner_region_map.keys())
+    due_date_field = get_case_due_date_field()
+    due_date_select = f", {due_date_field}" if due_date_field else ""
     
     # UPDATED: Added Heal_Desk__c to the query
-    query = f"""SELECT Id, CaseNumber, Subject, Owner.Name, Account.Name, Support_Level__c, Severity__c, CreatedDate, Heal_Desk__c,
+    query = f"""SELECT Id, CaseNumber, Subject, Status, Owner.Name, Account.Name, Support_Level__c, Severity__c, CreatedDate, Heal_Desk__c{due_date_select},
                (SELECT CommentBody, CreatedBy.Name, CreatedDate, IsPublished FROM CaseComments WHERE IsPublished=true ORDER BY CreatedDate DESC)
         FROM Case WHERE Owner.Name IN ({owner_names_str})
           AND Status IN ('New', 'Open', 'Assigned') AND Severity__c != null"""
@@ -51,8 +58,10 @@ def get_all_breach_records():
             case_owner = row.get('Case Owner', 'UNKNOWN')
             case_number = row.get('CaseNumber', 'N/A')
             customer_name = row.get('Customer Name', 'N/A')
+            status = row.get('Status', 'N/A')
             subject = row.get('Subject', '')
             comments = row.get('Comments', [])
+            due_date_value = row.get(due_date_field) if due_date_field else None
             
             last_customer_comment_dt = None
             if comments and isinstance(comments, list):
@@ -73,9 +82,11 @@ def get_all_breach_records():
                     sla_start_dt = convert_to_ist_dt(latest.get('CreatedDate'))
 
             effective_start_dt = sla_start_dt if sla_start_dt else last_customer_comment_dt
+            effective_start_dt = apply_due_date_sla_gate(effective_start_dt, due_date_value, support_level)
             if effective_start_dt is None:
                 created_date = row.get('Created Date')
                 if created_date: effective_start_dt = convert_to_ist_dt(created_date)
+                effective_start_dt = apply_due_date_sla_gate(effective_start_dt, due_date_value, support_level)
 
             sla_hours = get_sla_hours(severity, support_level)
             if not sla_hours: continue
@@ -83,7 +94,7 @@ def get_all_breach_records():
             sla_deadline_dt = calculate_sla_deadline(effective_start_dt, sla_hours, support_level)
             
             # UPDATED: Pass support_level to trigger the weekend pause logic!
-            sla_text, sla_mins = calculate_sla_variance(sla_deadline_dt, support_level)
+            sla_text, sla_mins = calculate_sla_variance(sla_deadline_dt, support_level, effective_start_dt)
             is_breached = isinstance(sla_mins, (int, float)) and sla_mins < 0
             
             if is_breached:
@@ -100,6 +111,7 @@ def get_all_breach_records():
                     'SLA Variance (mins)': int(sla_mins),
                     'SLA Status': f"🚨 Overdue: {sla_text.split(': ')[1] if ': ' in sla_text else sla_text}",
                     'Breach_Month': breach_month,
+                    'Salesforce Status': status,
                     'Is_Heal_Desk': bool(row.get('Heal_Desk__c')) # Added Heal Desk flag
                 })
         except Exception as e:
@@ -107,6 +119,264 @@ def get_all_breach_records():
             continue
             
     return pd.DataFrame(all_breaches) if all_breaches else pd.DataFrame()
+
+def _clean_snowflake_value(value):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if hasattr(value, "item"):
+        return value.item()
+    if isinstance(value, (bool, int, float, str)):
+        return value
+    return str(value)
+
+def _build_breach_rows(breaches_df, record_type, impact_status, impact_reason, now_ist):
+    rows = []
+    if breaches_df is None or breaches_df.empty:
+        return rows
+
+    for row in breaches_df.to_dict(orient="records"):
+        rows.append((
+            record_type,
+            now_ist.date(),
+            now_ist.replace(tzinfo=None),
+            _clean_snowflake_value(row.get("Case Number")),
+            _clean_snowflake_value(row.get("Customer Name")),
+            _clean_snowflake_value(row.get("Case Owner")),
+            _clean_snowflake_value(row.get("Severity")),
+            _clean_snowflake_value(row.get("Support Level")),
+            _clean_snowflake_value(row.get("Support Tier")),
+            _clean_snowflake_value(row.get("Salesforce Status")),
+            _clean_snowflake_value(row.get("SLA Status")),
+            _clean_snowflake_value(row.get("SLA Deadline")),
+            _clean_snowflake_value(row.get("Last Customer Comment")),
+            _clean_snowflake_value(row.get("SLA Variance (mins)")),
+            _clean_snowflake_value(row.get("Breach_Month")),
+            _clean_snowflake_value(row.get("Is_Heal_Desk")),
+            _clean_snowflake_value(row.get("Subject")),
+            impact_status,
+            impact_reason,
+            None,
+            None,
+        ))
+    return rows
+
+def _merge_sla_breach_rows(conn, rows):
+    if not rows:
+        return 0
+
+    cur = conn.cursor()
+    temp_table_name = "TEMP_SLA_BREACH_IMPACT_" + str(int(time.time()))
+    try:
+        cur.execute(f"""
+            CREATE OR REPLACE TEMPORARY TABLE {temp_table_name} (
+                RECORD_TYPE STRING, SNAPSHOT_DATE DATE, SNAPSHOT_TIMESTAMP TIMESTAMP_NTZ,
+                CASE_NUMBER STRING, CUSTOMER_NAME STRING, CASE_OWNER STRING, SEVERITY STRING,
+                SUPPORT_LEVEL STRING, SUPPORT_TIER STRING, SALESFORCE_STATUS STRING,
+                SLA_STATUS STRING, SLA_DEADLINE STRING, LAST_CUSTOMER_COMMENT STRING,
+                SLA_VARIANCE_MINS NUMBER, BREACH_MONTH STRING, IS_HEAL_DESK BOOLEAN,
+                SUBJECT STRING, IMPACT_STATUS STRING, IMPACT_REASON STRING,
+                PREVIOUS_SLA_STATUS STRING, CURRENT_SLA_STATUS STRING
+            )
+        """)
+        cur.executemany(
+            f"""
+            INSERT INTO {temp_table_name} (
+                RECORD_TYPE, SNAPSHOT_DATE, SNAPSHOT_TIMESTAMP, CASE_NUMBER, CUSTOMER_NAME,
+                CASE_OWNER, SEVERITY, SUPPORT_LEVEL, SUPPORT_TIER, SALESFORCE_STATUS,
+                SLA_STATUS, SLA_DEADLINE, LAST_CUSTOMER_COMMENT, SLA_VARIANCE_MINS,
+                BREACH_MONTH, IS_HEAL_DESK, SUBJECT, IMPACT_STATUS, IMPACT_REASON,
+                PREVIOUS_SLA_STATUS, CURRENT_SLA_STATUS
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            rows
+        )
+        cur.execute(f"""
+            MERGE INTO {SLA_BREACH_IMPACT_TABLE} target
+            USING {temp_table_name} source
+            ON target.RECORD_TYPE = source.RECORD_TYPE
+               AND target.SNAPSHOT_DATE = source.SNAPSHOT_DATE
+               AND target.CASE_NUMBER = source.CASE_NUMBER
+               AND NVL(target.IMPACT_STATUS, '') = NVL(source.IMPACT_STATUS, '')
+            WHEN MATCHED THEN UPDATE SET
+                SNAPSHOT_TIMESTAMP = source.SNAPSHOT_TIMESTAMP,
+                CUSTOMER_NAME = source.CUSTOMER_NAME,
+                CASE_OWNER = source.CASE_OWNER,
+                SEVERITY = source.SEVERITY,
+                SUPPORT_LEVEL = source.SUPPORT_LEVEL,
+                SUPPORT_TIER = source.SUPPORT_TIER,
+                SALESFORCE_STATUS = source.SALESFORCE_STATUS,
+                SLA_STATUS = source.SLA_STATUS,
+                SLA_DEADLINE = source.SLA_DEADLINE,
+                LAST_CUSTOMER_COMMENT = source.LAST_CUSTOMER_COMMENT,
+                SLA_VARIANCE_MINS = source.SLA_VARIANCE_MINS,
+                BREACH_MONTH = source.BREACH_MONTH,
+                IS_HEAL_DESK = source.IS_HEAL_DESK,
+                SUBJECT = source.SUBJECT,
+                IMPACT_REASON = source.IMPACT_REASON,
+                PREVIOUS_SLA_STATUS = source.PREVIOUS_SLA_STATUS,
+                CURRENT_SLA_STATUS = source.CURRENT_SLA_STATUS
+            WHEN NOT MATCHED THEN INSERT (
+                RECORD_TYPE, SNAPSHOT_DATE, SNAPSHOT_TIMESTAMP, CASE_NUMBER, CUSTOMER_NAME,
+                CASE_OWNER, SEVERITY, SUPPORT_LEVEL, SUPPORT_TIER, SALESFORCE_STATUS,
+                SLA_STATUS, SLA_DEADLINE, LAST_CUSTOMER_COMMENT, SLA_VARIANCE_MINS,
+                BREACH_MONTH, IS_HEAL_DESK, SUBJECT, IMPACT_STATUS, IMPACT_REASON,
+                PREVIOUS_SLA_STATUS, CURRENT_SLA_STATUS
+            ) VALUES (
+                source.RECORD_TYPE, source.SNAPSHOT_DATE, source.SNAPSHOT_TIMESTAMP,
+                source.CASE_NUMBER, source.CUSTOMER_NAME, source.CASE_OWNER,
+                source.SEVERITY, source.SUPPORT_LEVEL, source.SUPPORT_TIER,
+                source.SALESFORCE_STATUS, source.SLA_STATUS, source.SLA_DEADLINE,
+                source.LAST_CUSTOMER_COMMENT, source.SLA_VARIANCE_MINS,
+                source.BREACH_MONTH, source.IS_HEAL_DESK, source.SUBJECT,
+                source.IMPACT_STATUS, source.IMPACT_REASON,
+                source.PREVIOUS_SLA_STATUS, source.CURRENT_SLA_STATUS
+            )
+        """)
+        conn.commit()
+        return len(rows)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        try:
+            cur.execute(f"DROP TABLE IF EXISTS {temp_table_name}")
+        except Exception:
+            pass
+        cur.close()
+
+def _get_latest_active_breach_rows(conn):
+    cur = conn.cursor()
+    try:
+        cur.execute(f"""
+            SELECT CASE_NUMBER, CUSTOMER_NAME, CASE_OWNER, SEVERITY, SUPPORT_LEVEL,
+                   SUPPORT_TIER, SLA_STATUS, SLA_DEADLINE, LAST_CUSTOMER_COMMENT,
+                   SLA_VARIANCE_MINS, BREACH_MONTH, IS_HEAL_DESK, SUBJECT
+            FROM {SLA_BREACH_IMPACT_TABLE}
+            WHERE RECORD_TYPE = 'ACTIVE_BREACH'
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY CASE_NUMBER ORDER BY SNAPSHOT_TIMESTAMP DESC) = 1
+        """)
+        return cur.fetchall()
+    finally:
+        cur.close()
+
+def _daily_impact_already_synced(conn, snapshot_date):
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"SELECT COUNT(*) FROM {SLA_BREACH_IMPACT_TABLE} WHERE RECORD_TYPE = 'DAILY_IMPACT' AND SNAPSHOT_DATE = %s",
+            (snapshot_date,)
+        )
+        return (cur.fetchone() or [0])[0] > 0
+    finally:
+        cur.close()
+
+def _fetch_salesforce_case_statuses(case_numbers):
+    if not case_numbers:
+        return {}
+    sf = get_sf_connection()
+    statuses = {}
+    for i in range(0, len(case_numbers), 100):
+        chunk = case_numbers[i:i + 100]
+        safe_numbers = [str(num).replace("\\", "\\\\").replace("'", "\\'") for num in chunk if num]
+        if not safe_numbers:
+            continue
+        case_filter = "'" + "', '".join(safe_numbers) + "'"
+        result = sf.query_all(f"SELECT CaseNumber, Status FROM Case WHERE CaseNumber IN ({case_filter})")
+        for record in result.get("records", []):
+            statuses[record.get("CaseNumber")] = record.get("Status")
+    return statuses
+
+def _build_daily_impact_rows(conn, current_priority_df, now_ist):
+    if now_ist.hour < 18 or _daily_impact_already_synced(conn, now_ist.date()):
+        return []
+
+    latest_rows = _get_latest_active_breach_rows(conn)
+    if not latest_rows:
+        return []
+
+    current_by_case = {}
+    if current_priority_df is not None and not current_priority_df.empty:
+        current_by_case = {
+            row.get("Case Number"): row
+            for row in current_priority_df.to_dict(orient="records")
+            if row.get("Case Number")
+        }
+
+    case_numbers = [row[0] for row in latest_rows if row[0]]
+    sf_statuses = _fetch_salesforce_case_statuses(case_numbers)
+    impact_rows = []
+
+    for row in latest_rows:
+        (
+            case_number, customer_name, case_owner, severity, support_level,
+            support_tier, previous_sla_status, sla_deadline, last_customer_comment,
+            sla_variance_mins, breach_month, is_heal_desk, subject
+        ) = row
+
+        current_status = sf_statuses.get(case_number)
+        current_row = current_by_case.get(case_number, {})
+        current_sla_status = current_row.get("SLA Response Time")
+        impact_status = None
+        impact_reason = None
+
+        if current_status and current_status not in ACTIVE_CASE_STATUSES:
+            impact_status = "STATUS_EXITED_ACTIVE"
+            impact_reason = f"Case status changed to {current_status}"
+        elif current_sla_status and "Due in" in str(current_sla_status):
+            impact_status = "MOVED_TO_DUE_IN"
+            impact_reason = "Case moved from overdue to due in"
+
+        if not impact_status:
+            continue
+
+        impact_rows.append((
+            "DAILY_IMPACT",
+            now_ist.date(),
+            now_ist.replace(tzinfo=None),
+            case_number,
+            customer_name,
+            case_owner,
+            severity,
+            support_level,
+            support_tier,
+            current_status,
+            current_sla_status or previous_sla_status,
+            sla_deadline,
+            last_customer_comment,
+            sla_variance_mins,
+            breach_month,
+            is_heal_desk,
+            subject,
+            impact_status,
+            impact_reason,
+            previous_sla_status,
+            current_sla_status,
+        ))
+    return impact_rows
+
+def sync_sla_breach_impact_history(current_priority_df=None):
+    ist = pytz.timezone("Asia/Kolkata")
+    now_ist = datetime.now(ist)
+    breaches_df = get_all_breach_records()
+    conn = get_snowflake_connection()
+
+    active_rows = _build_breach_rows(
+        breaches_df,
+        "ACTIVE_BREACH",
+        "ACTIVE_OVERDUE",
+        "Current active SLA breach snapshot",
+        now_ist,
+    )
+    impact_rows = _build_daily_impact_rows(conn, current_priority_df, now_ist)
+    total_rows = _merge_sla_breach_rows(conn, active_rows + impact_rows)
+    if total_rows:
+        print(f"✅ SLA breach impact sync: upserted {total_rows} rows.")
+    return total_rows
 
 
 def render_30_day_chart(active_owners, search_query="", is_heal_desk_filter=False):

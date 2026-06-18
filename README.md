@@ -1,6 +1,6 @@
 # GCS Prioritization Index
 
-Streamlit dashboard for prioritizing open Salesforce support cases. The app pulls active cases from Salesforce, calculates priority and SLA information, reads AI sentiment from Snowflake, writes audit snapshots to Snowflake, and runs a background sentiment-analysis pipeline that updates Snowflake on a schedule.
+Streamlit dashboard for prioritizing open Salesforce support cases. The app pulls active cases from Salesforce, calculates priority and SLA information, reads AI sentiment from Snowflake, writes audit snapshots and SLA breach impact snapshots to Snowflake, and runs background pipelines that update Snowflake on a schedule.
 
 ## What This App Does
 
@@ -12,7 +12,9 @@ Streamlit dashboard for prioritizing open Salesforce support cases. The app pull
 - Shows ongoing SLA breach trends by support tier.
 - Reads AI sentiment from Snowflake table `DBD_SENTIMENT_DATA`.
 - Writes case audit snapshots into Snowflake table `DBD_CASE_AUDIT_HISTORY`.
+- Writes active SLA breach details and SLA reduction impact rows into Snowflake table `DBD_SLA_BREACH_IMPACT`.
 - Runs a background sentiment pipeline from `case_analysis/pages/Sentiment_analysis.py`.
+- Runs a background SLA breach impact sync every day at `6 PM IST`.
 
 ## Project Structure
 
@@ -29,6 +31,8 @@ Streamlit dashboard for prioritizing open Salesforce support cases. The app pull
 │   │   ├── WeightageMeter.py
 │   │   ├── OngoingSLABreaches.py
 │   │   └── Sentiment_analysis.py
+│   ├── archive
+│   │   └── Reporttopleft.py
 │   ├── services
 │   │   ├── case_service.py
 │   │   ├── snowflake_service.py
@@ -264,6 +268,7 @@ The dashboard query pulls:
 - SEV1 flag
 - Escalation flag
 - Created and closed dates
+- Due Date field, when present in Salesforce
 - Heal Desk flag
 - Published case comments
 
@@ -395,6 +400,25 @@ Important behavior:
 - SLA deadline is calculated from the latest meaningful support response, last customer comment, or case created date.
 - Generic support comments can be ignored for SLA start logic.
 - Breach shift is derived from the SLA deadline hour in IST.
+- If Salesforce has a non-empty Due Date field, SLA start is gated until the next day at `06:00 IST`. Example: Due Date `02 October` starts SLA from `03 October 06:00 IST`.
+- For Standard support, the Due Date gate can land in the weekend window, but SLA time does not burn during the weekend. Example: Friday Due Date starts at Saturday `06:00 IST`; S4 Standard still has 8 SLA hours and reaches deadline on Monday after weekend pause.
+- If the gated SLA start is still in the future, the displayed `Due in` time uses real calendar time until the SLA deadline, so it can show values such as `2d 3h 15m` instead of only the remaining SLA business hours.
+
+Due Date field detection checks common API names and the Salesforce field label:
+
+```text
+Due_Date__c
+DueDate__c
+Due_Date_Time__c
+DueDateTime__c
+DueDate
+Field label: Due Date
+```
+
+The Due Date gate is applied in:
+
+- `case_analysis/pages/CasePriorityIndex.py`
+- `case_analysis/pages/OngoingSLABreaches.py`
 
 ## AI Sentiment Pipeline
 
@@ -445,7 +469,7 @@ SELECT CaseNumber, Sentiment FROM DBD_SENTIMENT_DATA
 
 ## Background Scheduler
 
-The scheduler is in:
+The sentiment scheduler is in:
 
 ```text
 case_analysis/main.py
@@ -467,6 +491,53 @@ Behavior:
 - Repeats every `INTERVAL_MINUTES`.
 
 The scheduler runs in a daemon thread, so it stops when the Streamlit process stops.
+
+## SLA Breach Impact Sync
+
+SLA breach impact sync is implemented in:
+
+```text
+case_analysis/pages/OngoingSLABreaches.py
+```
+
+It is started from:
+
+```text
+case_analysis/main.py
+```
+
+Current behavior:
+
+```python
+SLA_IMPACT_RUN_HOUR_IST = 18
+```
+
+This means the app runs SLA breach impact sync every day at `6 PM IST` while the Streamlit process is running.
+
+The sync uses the same source data shown under:
+
+```text
+View x Breached Case Details
+```
+
+It writes two record types into `DBD_SLA_BREACH_IMPACT`:
+
+- `ACTIVE_BREACH`: current active overdue rows from the breach-detail view.
+- `DAILY_IMPACT`: impact rows for cases that were previously active overdue and have now improved.
+
+Impact status values:
+
+```text
+MOVED_TO_DUE_IN
+STATUS_EXITED_ACTIVE
+```
+
+Impact rules:
+
+- `MOVED_TO_DUE_IN`: a previously overdue case is now calculated as `Due in`.
+- `STATUS_EXITED_ACTIVE`: a previously overdue case is no longer in Salesforce status `New`, `Open`, or `Assigned`.
+
+The sync uses Snowflake `MERGE`, so reruns update/upsert the same case/date/impact type instead of continuously appending duplicates.
 
 ## Snowflake Tables
 
@@ -524,6 +595,81 @@ The audit table retention is configured to 2 days:
 ALTER TABLE DBD_CASE_AUDIT_HISTORY SET DATA_RETENTION_TIME_IN_DAYS = 2
 ```
 
+SLA breach impact table:
+
+```text
+DBD_SLA_BREACH_IMPACT
+```
+
+Create it manually in Snowflake:
+
+```sql
+CREATE TABLE IF NOT EXISTS DBD_SLA_BREACH_IMPACT (
+    SLA_IMPACT_ID STRING DEFAULT UUID_STRING(),
+    RECORD_TYPE STRING NOT NULL,
+    SNAPSHOT_DATE DATE NOT NULL,
+    SNAPSHOT_TIMESTAMP TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+
+    CASE_NUMBER STRING NOT NULL,
+    CUSTOMER_NAME STRING,
+    CASE_OWNER STRING,
+    SEVERITY STRING,
+    SUPPORT_LEVEL STRING,
+    SUPPORT_TIER STRING,
+    SALESFORCE_STATUS STRING,
+
+    SLA_STATUS STRING,
+    SLA_DEADLINE STRING,
+    LAST_CUSTOMER_COMMENT STRING,
+    SLA_VARIANCE_MINS NUMBER,
+    BREACH_MONTH STRING,
+    IS_HEAL_DESK BOOLEAN,
+    SUBJECT STRING,
+
+    IMPACT_STATUS STRING,
+    IMPACT_REASON STRING,
+    PREVIOUS_SLA_STATUS STRING,
+    CURRENT_SLA_STATUS STRING,
+
+    CREATED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+```
+
+Daily impact summary query:
+
+```sql
+SELECT
+    d.SNAPSHOT_DATE,
+    COUNT_IF(d.IMPACT_STATUS = 'MOVED_TO_DUE_IN') AS BACK_TO_SLA_COMPLIANCE,
+    COUNT_IF(d.IMPACT_STATUS = 'STATUS_EXITED_ACTIVE') AS CURRENTLY_OUT_OF_SCOPE_SUPPORT,
+    COUNT(*) AS TOTAL_IMPACT_COUNT,
+    t.TOTAL_RECORDS_FOR_DATE
+FROM DBD_SLA_BREACH_IMPACT d
+JOIN (
+    SELECT
+        SNAPSHOT_DATE,
+        COUNT(*) AS TOTAL_RECORDS_FOR_DATE
+    FROM DBD_SLA_BREACH_IMPACT
+    GROUP BY SNAPSHOT_DATE
+) t
+    ON d.SNAPSHOT_DATE = t.SNAPSHOT_DATE
+WHERE d.RECORD_TYPE = 'DAILY_IMPACT'
+GROUP BY d.SNAPSHOT_DATE, t.TOTAL_RECORDS_FOR_DATE
+ORDER BY d.SNAPSHOT_DATE DESC;
+```
+
+Active breach snapshot query:
+
+```sql
+SELECT
+    SNAPSHOT_DATE,
+    COUNT(DISTINCT CASE_NUMBER) AS ACTIVE_BREACH_COUNT
+FROM DBD_SLA_BREACH_IMPACT
+WHERE RECORD_TYPE = 'ACTIVE_BREACH'
+GROUP BY SNAPSHOT_DATE
+ORDER BY SNAPSHOT_DATE DESC;
+```
+
 ## Dashboard Filters
 
 Filters are implemented in:
@@ -576,6 +722,7 @@ This chart:
 - Recalculates SLA breach state.
 - Groups breached cases by month and support tier.
 - Applies owner, search, and Heal Desk filters from the main dashboard.
+- Provides the breach-detail rows used by the SLA breach impact Snowflake sync.
 
 ## Running Sentiment Pipeline Manually
 
@@ -691,7 +838,7 @@ Check:
 - Delinea Snowflake secret is accessible.
 - Fallback variables exist in `.env`.
 - Warehouse, database, and schema are correct.
-- User has access to `DBD_SENTIMENT_DATA` and `DBD_CASE_AUDIT_HISTORY`.
+- User has access to `DBD_OWNER_DATA`, `DBD_SENTIMENT_DATA`, `DBD_CASE_AUDIT_HISTORY`, and `DBD_SLA_BREACH_IMPACT`.
 
 ### OpenAI Sentiment Errors
 
@@ -713,8 +860,11 @@ Check:
 ## Current Known Implementation Notes
 
 - Salesforce owner names and regions are loaded from `DBD_OWNER_DATA`.
+- `case_analysis/archive/Reporttopleft.py` is archived legacy code and is not imported by the active app.
+- Due Date SLA gating starts SLA the next day at `06:00 IST`.
 - Sentiment uses Chat Completions, not the Responses API.
 - The dashboard reads sentiment from Snowflake; it does not call OpenAI directly.
 - The sentiment scheduler runs per Streamlit session.
+- SLA breach impact sync runs daily at `6 PM IST`.
 - Heal Desk filtering is applied after cases are pulled from Salesforce.
 - Some Streamlit APIs use `use_container_width`, which Streamlit warns will be replaced by `width` in newer versions.
