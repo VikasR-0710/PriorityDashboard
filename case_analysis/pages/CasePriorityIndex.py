@@ -505,6 +505,7 @@ def get_processed_data(progress_callback=None):
         sentiment_raw = sf_sentiments.get(case.get("CaseNumber"), "")
         sentiment = "sentiment not available yet" if not sentiment_raw or not sentiment_raw.strip() else sentiment_raw
         case_score = calculate_score(sevone, severity, support_level, escalated, sentiment, sla_mins)
+        case_score_display = int(case_score)
         
         is_heal_desk = bool(case.get("Heal_Desk__c"))
 
@@ -513,6 +514,7 @@ def get_processed_data(progress_callback=None):
             "Customer Name": customer_name, "Case Owner": owner_name, "Support Level": support_level,
             "Severity": severity, "Status": case.get("Status", "N/A"), "Escalated": escalated,
             "Last Comment By": last_commenter, "Sentiment": sentiment, "Case Score": case_score,
+            "Case Score Display": case_score_display,
             "Last Customer Comment": lcc_display, "SLA Response Time": sla_text,
             "SLA_Minutes": sla_mins, "SLA_Breach_Shift": breach_shift,
             "Is_Heal_Desk": is_heal_desk
@@ -553,6 +555,8 @@ def sync_audit_history(df: pd.DataFrame):
     df["Escalated"] = df["Escalated"].astype(bool)
     df["SLA_Minutes"] = pd.to_numeric(df["SLA_Minutes"], errors="coerce")
     df["Case Score"] = pd.to_numeric(df["Case Score"], errors="coerce")
+    if "Case Score Display" in df.columns:
+        df["Case Score Display"] = pd.to_numeric(df["Case Score Display"], errors="coerce")
     records = df.to_dict(orient="records")
     current_states = {}
     for r in records:

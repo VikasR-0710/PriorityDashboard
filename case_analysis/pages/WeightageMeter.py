@@ -10,8 +10,9 @@ def render_chart(filtered_df):
     # Use markdown for the header to maintain theme consistency instead of default subheader
     st.markdown("<h3 style='color: #F8FAFC; margin-top: 0; margin-bottom: 10px;'>📊 Weightage Meter</h3>", unsafe_allow_html=True)
 
-    # Calculate total score of all visible cases
-    total_score = filtered_df["Case Score"].sum()
+    # Calculate total visible score without decimal-only overdue ranking bonuses.
+    score_column = "Case Score Display" if "Case Score Display" in filtered_df.columns else "Case Score"
+    total_score = filtered_df[score_column].sum()
 
     # Count unique regions and owners currently displayed
     selected_regions = filtered_df["Region"].nunique()

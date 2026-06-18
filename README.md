@@ -373,6 +373,8 @@ The final score is stored as:
 Case Score
 ```
 
+`Case Score` keeps the decimal overdue bonus for ranking. The Weightage Meter uses `Case Score Display`, which removes those decimal-only overdue bonus points from the visible total.
+
 ## SLA Logic
 
 SLA functions live in:
