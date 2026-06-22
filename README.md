@@ -13,7 +13,7 @@ Streamlit dashboard for prioritizing open Salesforce support cases. The app pull
 - Reads AI sentiment from Snowflake table `DBD_SENTIMENT_DATA`.
 - Writes case audit snapshots into Snowflake table `DBD_CASE_AUDIT_HISTORY`.
 - Writes active SLA breach details and SLA reduction impact rows into Snowflake table `DBD_SLA_BREACH_IMPACT`.
-- Runs a background sentiment pipeline from `case_analysis/pages/Sentiment_analysis.py`.
+- Runs a background sentiment pipeline from `pages/Sentiment_analysis.py`.
 - Runs a background SLA breach impact sync every day at `6 PM IST`.
 
 ## Project Structure
@@ -24,24 +24,23 @@ Streamlit dashboard for prioritizing open Salesforce support cases. The app pull
 ├── requirements.txt
 ├── .env
 ├── .env.local
-├── case_analysis
-│   ├── main.py
-│   ├── pages
-│   │   ├── CasePriorityIndex.py
-│   │   ├── WeightageMeter.py
-│   │   ├── OngoingSLABreaches.py
-│   │   └── Sentiment_analysis.py
-│   ├── archive
-│   │   └── Reporttopleft.py
-│   ├── services
-│   │   ├── case_service.py
-│   │   ├── snowflake_service.py
-│   │   ├── openai_service.py
-│   │   ├── geminiai_service.py
-│   │   └── googlesheet_service.py
-│   └── config
-│       ├── settings.py
-│       └── delinea_loader.py
+├── main.py
+├── pages
+│   ├── CasePriorityIndex.py
+│   ├── WeightageMeter.py
+│   ├── OngoingSLABreaches.py
+│   └── Sentiment_analysis.py
+├── archive
+│   └── Reporttopleft.py
+├── services
+│   ├── case_service.py
+│   ├── snowflake_service.py
+│   ├── openai_service.py
+│   ├── geminiai_service.py
+│   └── googlesheet_service.py
+├── config
+│   ├── settings.py
+│   └── delinea_loader.py
 └── venv
 ```
 
@@ -50,31 +49,31 @@ Streamlit dashboard for prioritizing open Salesforce support cases. The app pull
 The app entry point is:
 
 ```text
-case_analysis/main.py
+main.py
 ```
 
 This is a Streamlit app. Do not run it with:
 
 ```bash
-python case_analysis/main.py
+python main.py
 ```
 
 Run it with Streamlit:
 
 ```bash
-python3 -m streamlit run case_analysis/main.py --server.fileWatcherType none
+python3 -m streamlit run main.py --server.fileWatcherType none
 ```
 
 If you want to use the virtualenv Python directly:
 
 ```bash
-venv/bin/python -m streamlit run case_analysis/main.py --server.fileWatcherType none
+venv/bin/python -m streamlit run main.py --server.fileWatcherType none
 ```
 
 If port `8501` is already in use:
 
 ```bash
-python3 -m streamlit run case_analysis/main.py --server.fileWatcherType none --server.port 8505
+python3 -m streamlit run main.py --server.fileWatcherType none --server.port 8505
 ```
 
 Then open:
@@ -90,7 +89,7 @@ or the custom port you selected.
 Create and activate a virtual environment:
 
 ```bash
-cd /Users/vr/Documents/Automation/v
+cd /Users/vr/Documents/Automation/GCS_Prioritisation_Index
 python3 -m venv venv
 source venv/bin/activate
 ```
@@ -104,7 +103,7 @@ python3 -m pip install -r requirements.txt
 Run the app:
 
 ```bash
-python3 -m streamlit run case_analysis/main.py --server.fileWatcherType none
+python3 -m streamlit run main.py --server.fileWatcherType none
 ```
 
 The `--server.fileWatcherType none` flag avoids macOS watchdog/FSEvents startup failures such as:
@@ -129,7 +128,7 @@ Never commit `.env`, `.env.local`, client secrets, private keys, or credential J
 Delinea logic is implemented in:
 
 ```text
-case_analysis/config/delinea_loader.py
+config/delinea_loader.py
 ```
 
 It uses:
@@ -245,7 +244,7 @@ OPENAI_API_KEY=your_openai_key
 The main case pull happens in:
 
 ```text
-case_analysis/pages/CasePriorityIndex.py
+pages/CasePriorityIndex.py
 ```
 
 Function:
@@ -309,9 +308,9 @@ The returned mapping is used for:
 
 The same owner table is used by:
 
-- `case_analysis/pages/CasePriorityIndex.py`
-- `case_analysis/pages/Sentiment_analysis.py`
-- `case_analysis/pages/OngoingSLABreaches.py`
+- `pages/CasePriorityIndex.py`
+- `pages/Sentiment_analysis.py`
+- `pages/OngoingSLABreaches.py`
 
 ## Heal Desk Cases
 
@@ -380,7 +379,7 @@ Case Score
 SLA functions live in:
 
 ```text
-case_analysis/pages/CasePriorityIndex.py
+pages/CasePriorityIndex.py
 ```
 
 Key functions:
@@ -419,15 +418,15 @@ Field label: Due Date
 
 The Due Date gate is applied in:
 
-- `case_analysis/pages/CasePriorityIndex.py`
-- `case_analysis/pages/OngoingSLABreaches.py`
+- `pages/CasePriorityIndex.py`
+- `pages/OngoingSLABreaches.py`
 
 ## AI Sentiment Pipeline
 
 Sentiment logic is implemented in:
 
 ```text
-case_analysis/pages/Sentiment_analysis.py
+pages/Sentiment_analysis.py
 ```
 
 The pipeline:
@@ -474,7 +473,7 @@ SELECT CaseNumber, Sentiment FROM DBD_SENTIMENT_DATA
 The sentiment scheduler is in:
 
 ```text
-case_analysis/main.py
+main.py
 ```
 
 Current values:
@@ -488,7 +487,7 @@ Behavior:
 
 - Starts once per Streamlit session.
 - Waits `INITIAL_DELAY_MINUTES`.
-- Loads `case_analysis/pages/Sentiment_analysis.py`.
+- Loads `pages/Sentiment_analysis.py`.
 - Calls its `main()` function.
 - Repeats every `INTERVAL_MINUTES`.
 
@@ -499,13 +498,13 @@ The scheduler runs in a daemon thread, so it stops when the Streamlit process st
 SLA breach impact sync is implemented in:
 
 ```text
-case_analysis/pages/OngoingSLABreaches.py
+pages/OngoingSLABreaches.py
 ```
 
 It is started from:
 
 ```text
-case_analysis/main.py
+main.py
 ```
 
 Current behavior:
@@ -710,7 +709,7 @@ When case search is active, prioritization slicing is skipped and matching cases
 Weightage meter:
 
 ```text
-case_analysis/pages/WeightageMeter.py
+pages/WeightageMeter.py
 ```
 
 This chart sums `Case Score` for currently visible cases.
@@ -718,7 +717,7 @@ This chart sums `Case Score` for currently visible cases.
 SLA breach chart:
 
 ```text
-case_analysis/pages/OngoingSLABreaches.py
+pages/OngoingSLABreaches.py
 ```
 
 This chart:
@@ -734,9 +733,9 @@ This chart:
 You can run the sentiment pipeline outside the dashboard:
 
 ```bash
-cd /Users/vr/Documents/Automation/v
+cd /Users/vr/Documents/Automation/GCS_Prioritisation_Index
 source venv/bin/activate
-python3 -m case_analysis.pages.Sentiment_analysis
+python3 -m pages.Sentiment_analysis
 ```
 
 This requires working Salesforce, OpenAI, and Snowflake credentials.
@@ -758,13 +757,13 @@ python3 -m pip install -r requirements.txt
 Run app:
 
 ```bash
-python3 -m streamlit run case_analysis/main.py --server.fileWatcherType none
+python3 -m streamlit run main.py --server.fileWatcherType none
 ```
 
 Run app on a specific port:
 
 ```bash
-python3 -m streamlit run case_analysis/main.py --server.fileWatcherType none --server.port 8505
+python3 -m streamlit run main.py --server.fileWatcherType none --server.port 8505
 ```
 
 Check installed packages:
@@ -780,13 +779,13 @@ python3 -m pip check
 Use `python3`:
 
 ```bash
-python3 -m streamlit run case_analysis/main.py --server.fileWatcherType none
+python3 -m streamlit run main.py --server.fileWatcherType none
 ```
 
 or call the venv binary:
 
 ```bash
-venv/bin/python -m streamlit run case_analysis/main.py --server.fileWatcherType none
+venv/bin/python -m streamlit run main.py --server.fileWatcherType none
 ```
 
 ### `missing ScriptRunContext`
@@ -796,13 +795,13 @@ This happens when a Streamlit app is run as a normal Python script.
 Wrong:
 
 ```bash
-python3 case_analysis/main.py
+python3 main.py
 ```
 
 Correct:
 
 ```bash
-python3 -m streamlit run case_analysis/main.py --server.fileWatcherType none
+python3 -m streamlit run main.py --server.fileWatcherType none
 ```
 
 ### `Cannot start fsevents stream`
@@ -810,7 +809,7 @@ python3 -m streamlit run case_analysis/main.py --server.fileWatcherType none
 Run with file watching disabled:
 
 ```bash
-python3 -m streamlit run case_analysis/main.py --server.fileWatcherType none
+python3 -m streamlit run main.py --server.fileWatcherType none
 ```
 
 ### `ModuleNotFoundError`
@@ -865,7 +864,7 @@ Check:
 ## Current Known Implementation Notes
 
 - Salesforce owner names and regions are loaded from `DBD_OWNER_DATA`.
-- `case_analysis/archive/Reporttopleft.py` is archived legacy code and is not imported by the active app.
+- `archive/Reporttopleft.py` is archived legacy code and is not imported by the active app.
 - Due Date SLA gating starts SLA the next day at `06:00 IST`.
 - Sentiment uses Chat Completions, not the Responses API.
 - The dashboard reads sentiment from Snowflake; it does not call OpenAI directly.

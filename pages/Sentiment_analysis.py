@@ -8,10 +8,10 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
-from case_analysis.services.case_service import CaseService
-from case_analysis.services.openai_service import OpenAIService
-from case_analysis.services.snowflake_service import SnowflakeService
-from case_analysis.pages.CasePriorityIndex import get_owner_region_map, build_owner_name_filter
+from services.case_service import CaseService
+from services.openai_service import OpenAIService
+from services.snowflake_service import SnowflakeService
+from pages.CasePriorityIndex import get_owner_region_map, build_owner_name_filter
 
 # ---------------------------------------------------------------------------
 # 🛠️ CONFIGURATION (Environment Variables)

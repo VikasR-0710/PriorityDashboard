@@ -1,6 +1,6 @@
 import os
 from openai import OpenAI
-from case_analysis.config.delinea_loader import fetch_openai_credentials
+from config.delinea_loader import fetch_openai_credentials
 
 class OpenAIService:
     def __init__(self):

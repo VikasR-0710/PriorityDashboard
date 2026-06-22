@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta
 import pytz
 
-from case_analysis.pages.CasePriorityIndex import (
+from pages.CasePriorityIndex import (
     get_sf_connection, get_owner_region_map, build_owner_name_filter, is_generalized_comment,
     get_sla_hours, convert_to_ist_dt, calculate_sla_deadline, calculate_sla_variance,
     get_case_due_date_field, apply_due_date_sla_gate, get_snowflake_connection,

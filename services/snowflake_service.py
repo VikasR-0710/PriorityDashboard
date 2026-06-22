@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 import snowflake.connector
-from case_analysis.config.delinea_loader import fetch_snowflake_credentials
+from config.delinea_loader import fetch_snowflake_credentials
 
 load_dotenv()
 

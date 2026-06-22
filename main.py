@@ -69,15 +69,15 @@ schedule_pipeline()
 # 📦 IMPORTS
 # -------------------------------------------------------
 try:
-    from case_analysis.pages.CasePriorityIndex import (
+    from pages.CasePriorityIndex import (
         inject_custom_css, 
         get_processed_data, 
         apply_filters_and_ranking, 
         render_table,
         sync_audit_history
     )
-    from case_analysis.pages.WeightageMeter import render_chart
-    from case_analysis.pages.OngoingSLABreaches import render_30_day_chart, sync_sla_breach_impact_history
+    from pages.WeightageMeter import render_chart
+    from pages.OngoingSLABreaches import render_30_day_chart, sync_sla_breach_impact_history
 except ImportError as e:
     st.error(f"❌ Import Error: {e}. Please check your file structure.")
     st.stop()

@@ -8,8 +8,8 @@ import numpy as np
 import pytz
 import os
 from datetime import datetime, timedelta
-from case_analysis.services.case_service import CaseService
-from case_analysis.services.snowflake_service import SnowflakeService # <-- ADDED IMPORT
+from services.case_service import CaseService
+from services.snowflake_service import SnowflakeService # <-- ADDED IMPORT
 
 # ---------------------------------------------------------------------------
 # 🔑 CONNECTIONS & CACHING

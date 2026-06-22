@@ -15,7 +15,7 @@ class GoogleSheetService:
         ]
 
         credentials = Credentials.from_service_account_file(
-            "case_analysis/config/credentials.json",
+            "config/credentials.json",
             scopes=scope
         )
 

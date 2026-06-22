@@ -1,7 +1,7 @@
 import os
 from simple_salesforce import Salesforce
-from case_analysis.config.settings import SALESFORCE_USERNAME, SALESFORCE_COMBINED, SALESFORCE_DOMAIN
-from case_analysis.config.delinea_loader import fetch_salesforce_credentials
+from config.settings import SALESFORCE_USERNAME, SALESFORCE_COMBINED, SALESFORCE_DOMAIN
+from config.delinea_loader import fetch_salesforce_credentials
 
 class SalesforceConnector:
     def __init__(self):
