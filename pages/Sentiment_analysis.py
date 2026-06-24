@@ -8,10 +8,13 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
+from config.logging_setup import setup_daily_logging
 from services.case_service import CaseService
 from services.openai_service import OpenAIService
 from services.snowflake_service import SnowflakeService
 from pages.CasePriorityIndex import get_owner_region_map, build_owner_name_filter
+
+LOG_DIR = setup_daily_logging()
 
 # ---------------------------------------------------------------------------
 # 🛠️ CONFIGURATION (Environment Variables)
@@ -25,6 +28,10 @@ PRICING_TIER = "standard"
 PRICE_SOURCE = "https://developers.openai.com/api/docs/pricing?latest-pricing=standard"
 OPENAI_DELAY = 0.5
 VALID_SENTIMENTS = {"Positive", "Neutral", "Negative", "Critical"}
+
+
+class MissingBatchSentimentError(ValueError):
+    pass
 
 
 def get_int_env(name, default):
@@ -346,7 +353,7 @@ Cases JSON:
         sentiments = parse_batch_sentiment_response(content)
         missing = [case_number for case_number in case_numbers if case_number not in sentiments]
         if missing:
-            raise ValueError(f"Missing sentiment for case(s): {', '.join(missing)}")
+            raise MissingBatchSentimentError(f"Missing sentiment for case(s): {', '.join(missing)}")
         audit_openai_usage(
             usage_conn,
             status="completed",
@@ -356,6 +363,9 @@ Cases JSON:
             metadata=metadata,
         )
         return [{"CaseNumber": case_number, "Sentiment": sentiments[case_number]} for case_number in case_numbers]
+    except MissingBatchSentimentError as e:
+        print(f"  ⚠️ Batch OpenAI sentiment incomplete for cases {case_numbers}: {e}")
+        return None
     except Exception as e:
         latency_ms = int((time.perf_counter() - started_at) * 1000)
         audit_openai_usage(
