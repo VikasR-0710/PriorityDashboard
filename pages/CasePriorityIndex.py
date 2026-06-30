@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from services.case_service import CaseService
 from services.snowflake_service import SnowflakeService # <-- ADDED IMPORT
 
+ALL_REGIONS_OPTION = "ALL"
+
 # ---------------------------------------------------------------------------
 # 🔑 CONNECTIONS & CACHING
 # ---------------------------------------------------------------------------
@@ -598,6 +600,19 @@ def clear_search():
     if "search_case_input" in st.session_state:
         del st.session_state["search_case_input"]
 
+def normalize_region_filter_selection():
+    selected = list(st.session_state.get("region_filter", []))
+    previous = list(st.session_state.get("selected_regions", [ALL_REGIONS_OPTION]))
+
+    if ALL_REGIONS_OPTION in selected and len(selected) > 1:
+        if ALL_REGIONS_OPTION in previous:
+            selected = [region for region in selected if region != ALL_REGIONS_OPTION]
+        else:
+            selected = [ALL_REGIONS_OPTION]
+
+    st.session_state.region_filter = selected
+    st.session_state.selected_regions = selected
+
 def apply_filters_and_ranking(df):
     # 🎯 Compact 4-column layout for perfect alignment
     c1, c2, c3, c4 = st.columns([1.0, 1.0, 1.0, 1.0])
@@ -605,12 +620,16 @@ def apply_filters_and_ranking(df):
     
     with c1:
         regions = sorted(set(owner_region_map.values()) - {"Agent"})
-        opts = ["ALL"] + regions
-        default = st.session_state.get("selected_regions", ["ALL"])
-        sel = st.multiselect("Region", opts, default=default, key="region_filter", label_visibility="collapsed",placeholder="Select Region")
+        opts = [ALL_REGIONS_OPTION] + regions
+        if "region_filter" not in st.session_state:
+            st.session_state.region_filter = [ALL_REGIONS_OPTION]
+        else:
+            st.session_state.region_filter = [region for region in st.session_state.region_filter if region in opts]
+        st.session_state.selected_regions = st.session_state.region_filter
+        sel = st.multiselect("Region", opts, key="region_filter", on_change=normalize_region_filter_selection, label_visibility="collapsed",placeholder="Select Region")
         st.session_state.selected_regions = sel
         
-    active_regions = regions if "ALL" in sel else sel
+    active_regions = regions if ALL_REGIONS_OPTION in sel else sel
     avail_owners = sorted(o for o, r in owner_region_map.items() if r in active_regions) if active_regions else []
     
     with c2:
