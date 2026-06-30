@@ -8,5 +8,5 @@ textColor = "#F8FAFC"      # White text
 font = "sans serif"
 
 [server]
-port = 3011
+port = 3001
 fileWatcherType = "none"
