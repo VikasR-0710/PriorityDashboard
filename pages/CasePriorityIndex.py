@@ -414,7 +414,8 @@ def is_generalized_comment(comment_body):
     if len(body_lower.split()) < 5: return True
     generic_phrases = ["looking into this", "working on this", "will get back to you",
         "checking with the team", "checking internally", "investigating the issue",
-        "thank you for your patience", "update you shortly", "out of office"]
+        "thank you for your patience", "update you shortly", "will update shortly",
+        "checking the issue", "update shortly", "out of office"]
     return any(phrase in body_lower for phrase in generic_phrases)
 
 def get_processed_data(progress_callback=None):
@@ -454,7 +455,7 @@ def get_processed_data(progress_callback=None):
             except: pass
 
         severity = case.get("Severity__c") or "N/A"
-        sevone = case.get("SEVONE__c")
+        sevone = case.get("Sevone__c", case.get("SEVONE__c")) or False
         escalated = case.get("IsEscalated") or False
         sla_hours = get_sla_hours(severity, support_level)      
 
@@ -519,7 +520,7 @@ def get_processed_data(progress_callback=None):
             "Case Score Display": case_score_display,
             "Last Customer Comment": lcc_display, "SLA Response Time": sla_text,
             "SLA_Minutes": sla_mins, "SLA_Breach_Shift": breach_shift,
-            "Is_Heal_Desk": is_heal_desk
+            "Sevone": bool(sevone), "Is_Heal_Desk": is_heal_desk
         })
         
     if progress_callback:
@@ -723,7 +724,7 @@ def render_table(filtered_df, cases):
         ("Sentiment", 1.2, "center"),
         ("Last Comment", 1.5, "left"),
         ("SLA Deadline", 1.8, "left"),
-        ("SLA Breach Shift", 1.8, "left"),
+        ("Sevone", 0.8, "center"),
         ("Priority", 0.6, "center")
     ]
     
@@ -740,7 +741,7 @@ def render_table(filtered_df, cases):
         ("Sentiment", 1.2, "Sentiment"),
         ("Last Comment", 1.5, "Last Comment By"),
         ("SLA Deadline", 1.8, "SLA Response Time"),
-        ("SLA Breach Shift", 1.8, "SLA_Breach_Shift"),
+        ("Sevone", 0.8, "Sevone"),
         ("Priority", 0.6, "Sequential_Rank")
     ]}
     
@@ -806,7 +807,8 @@ def render_table(filtered_df, cases):
             else:
                 sla_cell.markdown(f"<div style='text-align: left; font-size: 11px;'>{sla_text}</div>", unsafe_allow_html=True)
             
-            cols[11].markdown(f"<div style='text-align: left; font-size: 11px;'>{row['SLA_Breach_Shift']}</div>", unsafe_allow_html=True)
+            sevone_text = "Yes" if row["Sevone"] else "No"
+            cols[11].markdown(f"<div style='text-align: center; font-size: 11px;'>{sevone_text}</div>", unsafe_allow_html=True)
             
             cols[12].markdown(
                 f"<div style='text-align: center; font-weight: 700; font-size: 13px; "
