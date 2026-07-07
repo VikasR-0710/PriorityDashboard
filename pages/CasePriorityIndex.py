@@ -12,6 +12,7 @@ from services.case_service import CaseService
 from services.snowflake_service import SnowflakeService # <-- ADDED IMPORT
 
 ALL_REGIONS_OPTION = "ALL"
+ALL_PRIORITY_OPTION = "All priority"
 
 # ---------------------------------------------------------------------------
 # 🔑 CONNECTIONS & CACHING
@@ -614,6 +615,15 @@ def normalize_region_filter_selection():
     st.session_state.region_filter = selected
     st.session_state.selected_regions = selected
 
+def normalize_priority_filter_selection():
+    selected = list(st.session_state.get("sla_filter", []))
+
+    if ALL_PRIORITY_OPTION in selected and len(selected) > 1:
+        selected = [ALL_PRIORITY_OPTION]
+
+    st.session_state.sla_filter = selected
+    st.session_state.selected_sla_status = selected
+
 def apply_filters_and_ranking(df):
     # 🎯 Compact 4-column layout for perfect alignment
     c1, c2, c3, c4 = st.columns([1.0, 1.0, 1.0, 1.0])
@@ -642,9 +652,17 @@ def apply_filters_and_ranking(df):
         st.session_state.selected_owners = sel_owners
         
     with c3:
-        cats = ["Need Immediate Attention", "Need Secondary Attention"]
-        def_sla = st.session_state.get("selected_sla_status", [])
-        sel_sla = st.multiselect("Prioritization", cats, default=def_sla, key="sla_filter", label_visibility="collapsed",placeholder="Know Priority Cases")
+        cats = [ALL_PRIORITY_OPTION, "Need Immediate Attention", "Need Secondary Attention"]
+        if "sla_filter" not in st.session_state:
+            st.session_state.sla_filter = st.session_state.get("selected_sla_status", [ALL_PRIORITY_OPTION])
+
+        current_sla = list(st.session_state.sla_filter)
+        current_sla = [status for status in current_sla if status in cats]
+        if ALL_PRIORITY_OPTION in current_sla and len(current_sla) > 1:
+            current_sla = [ALL_PRIORITY_OPTION]
+        st.session_state.sla_filter = current_sla
+        st.session_state.selected_sla_status = current_sla
+        sel_sla = st.multiselect("Prioritization", cats, key="sla_filter", on_change=normalize_priority_filter_selection, label_visibility="collapsed",placeholder="Know Priority Cases")
         st.session_state.selected_sla_status = sel_sla
         
     with c4:
@@ -684,15 +702,18 @@ def apply_filters_and_ranking(df):
     if is_heal_desk_filter:
         filtered = filtered[filtered["Is_Heal_Desk"] == True].copy()
     
-    # 🎯 Apply Prioritization (Top 25/50) ONLY if no specific case search is active.
+    # 🎯 Apply Prioritization ONLY if no specific case search is active.
     if sel_sla and not search_query:
         filtered = filtered.sort_values(by=["Case Score", "SLA_Minutes"], ascending=[False, True]).reset_index(drop=True)
-        rows_to_keep = []
-        if "Need Immediate Attention" in sel_sla: rows_to_keep.extend(range(0, min(25, len(filtered))))
-        if "Need Secondary Attention" in sel_sla: rows_to_keep.extend(range(25, min(50, len(filtered))))
-        rows_to_keep = sorted(set(rows_to_keep))
-        filtered = filtered.iloc[rows_to_keep].reset_index(drop=True)
-        filtered["Sequential_Rank"] = [i + 1 for i in rows_to_keep] if len(sel_sla) == 2 else range(1, len(filtered) + 1)
+        if ALL_PRIORITY_OPTION in sel_sla:
+            filtered["Sequential_Rank"] = range(1, len(filtered) + 1)
+        else:
+            rows_to_keep = []
+            if "Need Immediate Attention" in sel_sla: rows_to_keep.extend(range(0, min(25, len(filtered))))
+            if "Need Secondary Attention" in sel_sla: rows_to_keep.extend(range(25, min(50, len(filtered))))
+            rows_to_keep = sorted(set(rows_to_keep))
+            filtered = filtered.iloc[rows_to_keep].reset_index(drop=True)
+            filtered["Sequential_Rank"] = [i + 1 for i in rows_to_keep] if len(sel_sla) == 2 else range(1, len(filtered) + 1)
     elif not filtered.empty:
         filtered = filtered.sort_values(by=["Case Owner", "Case Score"], ascending=[True, False])
         filtered["Sequential_Rank"] = filtered.groupby("Case Owner").cumcount() + 1
