@@ -13,6 +13,8 @@ def render_chart(filtered_df):
     # Calculate total visible score without decimal-only overdue ranking bonuses.
     score_column = "Case Score Display" if "Case Score Display" in filtered_df.columns else "Case Score"
     total_score = filtered_df[score_column].sum()
+    total_score_value = float(total_score)
+    total_score_format = ".2f" if not total_score_value.is_integer() else ".0f"
 
     # Count unique regions and owners currently displayed
     selected_regions = filtered_df["Region"].nunique()
@@ -48,7 +50,8 @@ def render_chart(filtered_df):
             domain={'x':[0,1], 'y':[0.15,0.9]},  # Adjusted y-range to use more vertical space
 
             number={
-                "font":{"size":50, "color": "#F8FAFC"} # Large white font for the score
+                "font":{"size":50, "color": "#F8FAFC"}, # Large white font for the score
+                "valueformat": total_score_format
             },
 
                 gauge={

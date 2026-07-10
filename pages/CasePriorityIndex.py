@@ -13,6 +13,10 @@ from services.snowflake_service import SnowflakeService # <-- ADDED IMPORT
 
 ALL_REGIONS_OPTION = "ALL"
 ALL_PRIORITY_OPTION = "All priority"
+LOW_PRIORITY_RECORD_TYPES = {
+    "Decommission Request",
+    "Customer Communication",
+}
 
 # ---------------------------------------------------------------------------
 # 🔑 CONNECTIONS & CACHING
@@ -124,9 +128,23 @@ def fetch_snowflake_sentiments():
         print(f"❌ Snowflake fetch failed: {e}")
         return {}
 
-def calculate_score(sevone, severity, support_level, escalated, sentiment="", sla_mins=None):
-    if sevone: return 35
+def is_low_priority_record_type_case(case):
+    record_type_id = (case.get("RecordTypeId") or "").strip().lower()
+    record_type_name = ((case.get("RecordType") or {}).get("Name") or "").strip().lower()
+    record_type_developer_name = ((case.get("RecordType") or {}).get("DeveloperName") or "").strip().lower()
+    low_priority_types = {record_type.lower() for record_type in LOW_PRIORITY_RECORD_TYPES}
+    low_priority_developer_names = {record_type.replace(" ", "_").lower() for record_type in LOW_PRIORITY_RECORD_TYPES}
+
+    return (
+        record_type_id in low_priority_types
+        or record_type_name in low_priority_types
+        or record_type_developer_name in low_priority_developer_names
+    )
+
+def calculate_score(sevone, severity, support_level, escalated, sentiment="", sla_mins=None, is_low_priority_record_type=False):
     if escalated: return 30
+    if is_low_priority_record_type: return 0.25
+    if sevone: return 35
     
     is_overdue = isinstance(sla_mins, (int, float)) and sla_mins < 0
     sentiment_lower = (sentiment or "").lower().strip()
@@ -318,13 +336,14 @@ def get_project_support(project_id):
     sup_res = sf.query(f"SELECT Support_Level__c FROM Case WHERE Account.Name LIKE '%{proj_name}%' AND Support_Level__c != NULL LIMIT 1")
     return sup_res["records"][0].get("Support_Level__c") if sup_res["records"] else None
 
+@st.cache_data(ttl=3600)
 def fetch_cases():
     sf = get_sf_connection()
     owner_names_str = build_owner_name_filter(get_owner_region_map().keys())
     due_date_field = get_case_due_date_field()
     due_date_select = f", {due_date_field}" if due_date_field else ""
     query = f"""
-        SELECT Id, CaseNumber, Subject, Status, Owner.Name, Account.Name, AccountName__c,
+        SELECT Id, CaseNumber, Subject, Status, Owner.Name, Account.Name, AccountName__c, RecordTypeId, RecordType.Name, RecordType.DeveloperName,
             Support_Level__c, Severity__c, Sevone__c, IsEscalated, CreatedDate, ClosedDate, Heal_Desk__c{due_date_select},
             (select CommentBody, CreatedBy.Name, CreatedDate, IsPublished from CaseComments where IsPublished=true order by CreatedDate Desc)
         FROM Case
@@ -508,8 +527,9 @@ def get_processed_data(progress_callback=None):
         
         sentiment_raw = sf_sentiments.get(case.get("CaseNumber"), "")
         sentiment = "sentiment not available yet" if not sentiment_raw or not sentiment_raw.strip() else sentiment_raw
-        case_score = calculate_score(sevone, severity, support_level, escalated, sentiment, sla_mins)
-        case_score_display = int(case_score)
+        is_low_priority_record_type = is_low_priority_record_type_case(case)
+        case_score = calculate_score(sevone, severity, support_level, escalated, sentiment, sla_mins, is_low_priority_record_type)
+        case_score_display = case_score if is_low_priority_record_type and not escalated else int(case_score)
         
         is_heal_desk = bool(case.get("Heal_Desk__c"))
 
@@ -732,7 +752,7 @@ def render_table(filtered_df, cases):
         st.session_state.sort_column = None
     if "sort_asc" not in st.session_state: 
         st.session_state.sort_asc = True
-    
+
     col_config = [
         ("Region", 0.7, "left"),
         ("Case", 0.9, "left"),
