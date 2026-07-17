@@ -24,6 +24,7 @@ class CaseState:
     owner: str
     priority: float | None
     escalated: bool
+    status: str
     case: dict[str, Any]
 
 
@@ -47,6 +48,7 @@ class CaseChangeNotificationJob:
     ) -> dict[str, int]:
         stats = {
             "new_assignment": 0,
+            "follow_up_response": 0,
             "priority_changed": 0,
             "sent": 0,
             "skipped": 0,
@@ -84,6 +86,13 @@ class CaseChangeNotificationJob:
                 stats["new_assignment"] += 1
                 new_assignments.setdefault(owner_key, []).append(current_state)
                 continue
+
+            if (
+                current_state.status.casefold() == "assigned"
+                and previous_state.status.casefold() != "assigned"
+            ):
+                stats["follow_up_response"] += 1
+                new_assignments.setdefault(owner_key, []).append(current_state)
 
             if (
                 (
@@ -185,6 +194,7 @@ class CaseChangeNotificationJob:
                 owner=owner,
                 priority=self._priority(record),
                 escalated=self._boolean(record.get("Escalated")),
+                status=str(record.get("Status") or "").strip(),
                 case=record,
             )
         return states
