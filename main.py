@@ -95,7 +95,7 @@ except ImportError as e:
 # -------------------------------------------------------
 # BACKGROUND CASE REFRESH (INDEPENDENT OF THE UI)
 # -------------------------------------------------------
-BACKGROUND_REFRESH_SECONDS = int(os.getenv("BACKGROUND_REFRESH_SECONDS", "600"))
+BACKGROUND_REFRESH_SECONDS = 60
 BACKGROUND_REFRESH_LABEL = (
     f"{BACKGROUND_REFRESH_SECONDS // 60} minute(s)"
     if BACKGROUND_REFRESH_SECONDS % 60 == 0

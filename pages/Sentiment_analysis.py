@@ -34,14 +34,7 @@ class MissingBatchSentimentError(ValueError):
     pass
 
 
-def get_int_env(name, default):
-    try:
-        return int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-OPENAI_BATCH_SIZE = max(get_int_env("OPENAI_BATCH_SIZE", 25), 1)
+OPENAI_BATCH_SIZE = 5
 
 MODEL_PRICING_PER_1M = {
     "gpt-4o-mini": {

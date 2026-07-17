@@ -56,13 +56,11 @@ def _bool_env(name: str, default: bool) -> bool:
 class GCSNotificationSettings:
     """Non-secret notification controls. Slack credentials come from Delinea."""
 
-    enabled: bool = _bool_env("GCS_SLACK_ENABLED", False)
-    test_only: bool = _bool_env("GCS_SLACK_TEST_ONLY", True)
-    dry_run: bool = _bool_env("GCS_SLACK_DRY_RUN", True)
-    recipient_scope: str = os.getenv("GCS_SLACK_RECIPIENT_SCOPE", "all").strip()
-    digest_cases_per_message: int = int(
-        os.getenv("GCS_SLACK_DIGEST_CASES_PER_MESSAGE", "20")
-    )
+    enabled: bool = True
+    test_only: bool = False
+    dry_run: bool = False
+    recipient_scope: str = "NA EAST"
+    digest_cases_per_message: int = 20
     salesforce_case_url: str = os.getenv("GCS_SALESFORCE_CASE_URL", "")
     dashboard_url: str = os.getenv("GCS_DASHBOARD_URL", "")
     analyst_table: str = os.getenv(
