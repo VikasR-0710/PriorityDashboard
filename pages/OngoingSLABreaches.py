@@ -165,7 +165,15 @@ def _build_breach_rows(breaches_df, record_type, impact_status, impact_reason, n
         ))
     return rows
 
+def _dedupe_sla_breach_rows(rows):
+    deduped = {}
+    for row in rows:
+        key = (row[0], row[1], row[3], row[17] or "")
+        deduped[key] = row
+    return list(deduped.values())
+
 def _merge_sla_breach_rows(conn, rows):
+    rows = _dedupe_sla_breach_rows(rows)
     if not rows:
         return 0
 

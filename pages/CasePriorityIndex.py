@@ -116,7 +116,10 @@ def build_owner_name_filter(owner_names):
     return "'" + "', '".join(safe_names) + "'"
 
 @st.cache_data(ttl=3600)
-def fetch_snowflake_sentiments():
+def fetch_snowflake_sentiments(refresh_token=None):
+    # refresh_token is intentionally unused in the query.  It is part of the
+    # Streamlit cache key so the background worker can request a fresh snapshot
+    # without clearing (and therefore changing) the dashboard's visible cache.
     try:
         conn = get_snowflake_connection()
         cursor = conn.cursor()
@@ -337,7 +340,9 @@ def get_project_support(project_id):
     return sup_res["records"][0].get("Support_Level__c") if sup_res["records"] else None
 
 @st.cache_data(ttl=3600)
-def fetch_cases():
+def fetch_cases(refresh_token=None):
+    # See fetch_snowflake_sentiments(): the token isolates background refreshes
+    # from the snapshot currently displayed in each browser session.
     sf = get_sf_connection()
     owner_names_str = build_owner_name_filter(get_owner_region_map().keys())
     due_date_field = get_case_due_date_field()
@@ -438,15 +443,15 @@ def is_generalized_comment(comment_body):
         "checking the issue", "update shortly", "out of office"]
     return any(phrase in body_lower for phrase in generic_phrases)
 
-def get_processed_data(progress_callback=None):
+def get_processed_data(progress_callback=None, refresh_token=None):
     if progress_callback:
         progress_callback(5, "Initializing connections...")
         
-    cases = fetch_cases()
+    cases = fetch_cases(refresh_token=refresh_token)
     if progress_callback:
         progress_callback(20, f"Fetched {len(cases)} cases from Salesforce...")
         
-    sf_sentiments = fetch_snowflake_sentiments()
+    sf_sentiments = fetch_snowflake_sentiments(refresh_token=refresh_token)
     if progress_callback:
         progress_callback(35, "Fetching sentiment data from Snowflake...")
         
@@ -534,7 +539,8 @@ def get_processed_data(progress_callback=None):
         is_heal_desk = bool(case.get("Heal_Desk__c"))
 
         dashboard.append({
-            "Region": owner_region_map.get(owner_name, "UNKNOWN"), "Case Number": case.get("CaseNumber", "N/A"),
+            "Region": owner_region_map.get(owner_name, "UNKNOWN"), "Case Id": case.get("Id"),
+            "Case Number": case.get("CaseNumber", "N/A"), "Subject": case.get("Subject", "No subject"),
             "Customer Name": customer_name, "Case Owner": owner_name, "Support Level": support_level,
             "Severity": severity, "Status": case.get("Status", "N/A"), "Escalated": escalated,
             "Last Comment By": last_commenter, "Sentiment": sentiment, "Case Score": case_score,

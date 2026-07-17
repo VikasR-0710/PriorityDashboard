@@ -3,6 +3,7 @@ import os
 import threading
 import time
 import importlib.util
+import uuid
 import streamlit as st
 import pytz
 from datetime import datetime, timedelta
@@ -83,9 +84,55 @@ try:
     )
     from pages.WeightageMeter import render_chart
     from pages.OngoingSLABreaches import render_30_day_chart, sync_sla_breach_impact_history
+    from jobs.case_change_notification_job import CaseChangeNotificationJob
+    from config.settings import gcs_notification_settings
+    from services.background_case_refresh_service import BackgroundCaseRefreshService
+    from services.notification_service import ShiftNotificationScheduler
 except ImportError as e:
     st.error(f"❌ Import Error: {e}. Please check your file structure.")
     st.stop()
+
+# -------------------------------------------------------
+# BACKGROUND CASE REFRESH (INDEPENDENT OF THE UI)
+# -------------------------------------------------------
+BACKGROUND_REFRESH_SECONDS = int(os.getenv("BACKGROUND_REFRESH_SECONDS", "600"))
+BACKGROUND_REFRESH_LABEL = (
+    f"{BACKGROUND_REFRESH_SECONDS // 60} minute(s)"
+    if BACKGROUND_REFRESH_SECONDS % 60 == 0
+    else f"{BACKGROUND_REFRESH_SECONDS} seconds"
+)
+
+@st.cache_resource
+def get_case_change_notification_job():
+    return CaseChangeNotificationJob()
+
+def notify_case_changes(previous_snapshot, current_snapshot):
+    if not gcs_notification_settings.enabled or gcs_notification_settings.test_only:
+        return
+    stats = get_case_change_notification_job().run(
+        previous_snapshot.dataframe if previous_snapshot else None,
+        current_snapshot.dataframe,
+    )
+    if any(stats.values()):
+        print(f"GCS case change notifications: {stats}")
+
+@st.cache_resource
+def get_background_case_refresh_service():
+    return BackgroundCaseRefreshService(
+        loader=get_processed_data,
+        interval_seconds=BACKGROUND_REFRESH_SECONDS,
+        on_refresh=notify_case_changes,
+    )
+
+background_case_refresh = get_background_case_refresh_service()
+background_case_refresh.start(run_immediately=False)
+
+@st.cache_resource
+def get_shift_notification_scheduler():
+    return ShiftNotificationScheduler(snapshot_loader=get_processed_data)
+
+shift_notification_scheduler = get_shift_notification_scheduler()
+shift_notification_scheduler.start()
 
 # -------------------------------------------------------
 # 📉 SLA BREACH IMPACT SCHEDULER
@@ -176,9 +223,10 @@ st.markdown(
 # 🔄 HEADER & REFRESH LOGIC
 # -------------------------------------------------------
 def refresh_dashboard():
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    keys_to_clear = ['filter_case_id', 'filter_region', 'filter_status', 'expanded_rows', 'selected_cases', 'audit_synced', 'dashboard_loaded', 'search_case_input']
+    # Stop the current cycle and begin a new configured refresh window. The foreground
+    # reload below is isolated by its own token, so it cannot race with the worker.
+    background_case_refresh.restart(run_immediately=False)
+    keys_to_clear = ['ui_case_snapshot', 'audit_synced', 'sla_breach_impact_synced', 'dashboard_loaded']
     for key in keys_to_clear:
         if key in st.session_state: del st.session_state[key]
     st.rerun()
@@ -227,6 +275,30 @@ with header_col2:
     if st.button("🔄 Refresh", use_container_width=True, type="secondary"):
         refresh_dashboard()
 
+@st.fragment(run_every=30)
+def render_background_update_status():
+    """Poll worker metadata without rerunning or replacing dashboard data."""
+    snapshot = background_case_refresh.get_snapshot()
+    ui_snapshot = st.session_state.get("ui_case_snapshot")
+    if ui_snapshot is None:
+        return
+    ui_loaded_at = (
+        ui_snapshot.get("loaded_at", 0)
+        if isinstance(ui_snapshot, dict)
+        else 0
+    )
+    if snapshot and snapshot.refreshed_at > ui_loaded_at:
+        refreshed_ist = datetime.fromtimestamp(
+            snapshot.refreshed_at,
+            tz=pytz.timezone("Asia/Kolkata"),
+        ).strftime("%d-%b-%Y %I:%M:%S %p IST")
+        st.info(
+            f"🟢 New data available from {refreshed_ist}. "
+            "Click Refresh to update the dashboard."
+        )
+
+render_background_update_status()
+
 st.divider()
 
 # -------------------------------------------------------
@@ -269,7 +341,27 @@ if is_initial_load:
     update_overlay(0, "Preparing to load...")
 
 try:
-    df, cases = get_processed_data(progress_callback=update_overlay)
+    # Keep one immutable data snapshot per browser session. Streamlit widget
+    # reruns (filters, sorting, row expansion) continue to render this snapshot
+    # until the user explicitly presses Refresh.
+    if "ui_case_snapshot" not in st.session_state:
+        ui_refresh_token = f"ui-{uuid.uuid4()}"
+        ui_dataframe, ui_cases = get_processed_data(
+            progress_callback=update_overlay,
+            refresh_token=ui_refresh_token,
+        )
+        st.session_state.ui_case_snapshot = {
+            "dataframe": ui_dataframe,
+            "cases": ui_cases,
+            "loaded_at": time.time(),
+        }
+    ui_snapshot = st.session_state.ui_case_snapshot
+    # Compatibility for browser sessions created before snapshot metadata was
+    # introduced; their visible data remains intact until manual Refresh.
+    if isinstance(ui_snapshot, dict):
+        df, cases = ui_snapshot["dataframe"], ui_snapshot["cases"]
+    else:
+        df, cases = ui_snapshot
     
     update_overlay(92, "Syncing audit history...")
     if not st.session_state.get("audit_synced"):
@@ -326,4 +418,4 @@ except Exception as e:
     st.stop()
 
 st.divider()
-st.caption("🔄 Index auto-refreshes every 1 Hour directly from Salesforce. Audit history retains 2-day change snapshots.")
+st.caption(f"🔄 Backend data refreshes every {BACKGROUND_REFRESH_LABEL}. The visible index changes only when Refresh is clicked. Audit history retains 2-day change snapshots.")

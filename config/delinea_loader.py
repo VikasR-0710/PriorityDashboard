@@ -156,3 +156,14 @@ def fetch_openai_credentials() -> dict | None:
     except Exception as exc:
         logger.error("Delinea: could not fetch OpenAI credentials — %s", exc)
         return None
+
+def fetch_slack_credentials() -> dict | None:
+    """Return the Agentic Support Slack Bot token from Delinea."""
+    try:
+        secret = _get_secret_by_name(_FOLDER_SHARED, "Agentic Support Slack Bot")
+        if not secret:
+            return None
+        return {"bot_token": _field(secret, "API Key")}
+    except Exception as exc:
+        logger.error("Delinea: could not fetch Slack credentials — %s", exc)
+        return None

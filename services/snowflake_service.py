@@ -24,6 +24,8 @@ class SnowflakeService:
             raise ValueError("Snowflake credentials are missing. Check Delinea or .env file.")
 
         conn_kwargs = {"user": user, "password": password, "account": account}
+        role = os.getenv("SNOWFLAKE_ROLE", "").strip()
+        if role: conn_kwargs["role"] = role
         if warehouse: conn_kwargs["warehouse"] = warehouse
         if database: conn_kwargs["database"] = database
         if schema: conn_kwargs["schema"] = schema
