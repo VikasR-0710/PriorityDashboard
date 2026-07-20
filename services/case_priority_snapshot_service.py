@@ -132,8 +132,11 @@ class CasePrioritySnapshotService:
         )
         cursor = conn.cursor()
         try:
-            cursor.execute(f"CREATE TEMPORARY TABLE {stage} LIKE {self.table}")
             column_list = ", ".join(self.COLUMNS)
+            cursor.execute(
+                f"CREATE TEMPORARY TABLE {stage} AS "
+                f"SELECT {column_list} FROM {self.table} WHERE 1 = 0"
+            )
             placeholders = ", ".join(["%s"] * len(self.COLUMNS))
             cursor.executemany(
                 f"INSERT INTO {stage} ({column_list}) VALUES ({placeholders})",

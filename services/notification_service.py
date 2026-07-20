@@ -539,7 +539,6 @@ class CaseNotificationAuditService:
             return 0
 
         delivery_id = str(uuid.uuid4())
-        ist_timestamp = datetime.now(pytz.timezone("Asia/Kolkata")).replace(tzinfo=None)
         rows = []
         for event in events:
             rows.append((
@@ -562,7 +561,6 @@ class CaseNotificationAuditService:
                 event.get("current_escalated"),
                 slack_user_id,
                 slack_message_ts,
-                ist_timestamp,
             ))
 
         conn = self.snowflake.connect(
@@ -583,7 +581,8 @@ class CaseNotificationAuditService:
                     SLACK_USER_ID, SLACK_MESSAGE_TS, IST_TIMESTAMP
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ
                 )""",
                 rows,
             )
