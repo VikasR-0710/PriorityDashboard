@@ -464,11 +464,6 @@ class NotificationRunService:
                     CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ
             )"""
         )
-        cursor.execute(
-            f"""ALTER TABLE {self.table} ADD COLUMN IF NOT EXISTS
-            IST_TIMESTAMP TIMESTAMP_NTZ DEFAULT
-            CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ"""
-        )
 
     def try_start(self, run_id: str) -> bool:
         conn = self.snowflake.connect(
@@ -484,7 +479,9 @@ class NotificationRunService:
                 return False
             try:
                 cursor.execute(
-                    f"INSERT INTO {self.table} (RUN_ID, STATUS) VALUES (%s, 'RUNNING')",
+                    f"""INSERT INTO {self.table} (RUN_ID, STATUS, IST_TIMESTAMP)
+                    VALUES (%s, 'RUNNING',
+                        CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ)""",
                     (run_id,),
                 )
                 conn.commit()
@@ -542,6 +539,7 @@ class CaseNotificationAuditService:
             return 0
 
         delivery_id = str(uuid.uuid4())
+        ist_timestamp = datetime.now(pytz.timezone("Asia/Kolkata")).replace(tzinfo=None)
         rows = []
         for event in events:
             rows.append((
@@ -564,6 +562,7 @@ class CaseNotificationAuditService:
                 event.get("current_escalated"),
                 slack_user_id,
                 slack_message_ts,
+                ist_timestamp,
             ))
 
         conn = self.snowflake.connect(
@@ -573,11 +572,6 @@ class CaseNotificationAuditService:
         )
         cursor = conn.cursor()
         try:
-            cursor.execute(
-                f"""ALTER TABLE {self.table} ADD COLUMN IF NOT EXISTS
-                IST_TIMESTAMP TIMESTAMP_NTZ DEFAULT
-                CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ"""
-            )
             cursor.executemany(
                 f"""INSERT INTO {self.table} (
                     EVENT_ID, DELIVERY_ID, USE_CASE, NOTIFICATION_TYPE,
@@ -586,10 +580,10 @@ class CaseNotificationAuditService:
                     PREVIOUS_PRIORITY, CURRENT_PRIORITY,
                     PREVIOUS_STATUS, CURRENT_STATUS,
                     PREVIOUS_ESCALATED, CURRENT_ESCALATED,
-                    SLACK_USER_ID, SLACK_MESSAGE_TS
+                    SLACK_USER_ID, SLACK_MESSAGE_TS, IST_TIMESTAMP
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )""",
                 rows,
             )

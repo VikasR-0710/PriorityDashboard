@@ -132,11 +132,6 @@ class CasePrioritySnapshotService:
         )
         cursor = conn.cursor()
         try:
-            cursor.execute(
-                f"ALTER TABLE {self.table} ADD COLUMN IF NOT EXISTS "
-                "IST_TIMESTAMP TIMESTAMP_NTZ DEFAULT "
-                "CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ"
-            )
             cursor.execute(f"CREATE TEMPORARY TABLE {stage} LIKE {self.table}")
             column_list = ", ".join(self.COLUMNS)
             placeholders = ", ".join(["%s"] * len(self.COLUMNS))

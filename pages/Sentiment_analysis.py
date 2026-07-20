@@ -164,11 +164,6 @@ def upsert_to_snowflake(data):
     
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            f"ALTER TABLE {TARGET_TABLE} ADD COLUMN IF NOT EXISTS "
-            "IST_TIMESTAMP TIMESTAMP_NTZ DEFAULT "
-            "CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ"
-        )
         print(f"📤 Upserting {len(data)} records into {TARGET_TABLE}...")
         values_list = []
         for d in data:

@@ -180,9 +180,6 @@ def _merge_sla_breach_rows(conn, rows):
     cur = conn.cursor()
     temp_table_name = "TEMP_SLA_BREACH_IMPACT_" + str(int(time.time()))
     try:
-        cur.execute(f"""ALTER TABLE {SLA_BREACH_IMPACT_TABLE}
-            ADD COLUMN IF NOT EXISTS IST_TIMESTAMP TIMESTAMP_NTZ DEFAULT
-            CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ""")
         cur.execute(f"""
             CREATE OR REPLACE TEMPORARY TABLE {temp_table_name} (
                 RECORD_TYPE STRING, SNAPSHOT_DATE DATE, SNAPSHOT_TIMESTAMP TIMESTAMP_NTZ,
