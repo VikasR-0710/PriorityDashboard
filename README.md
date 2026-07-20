@@ -30,14 +30,17 @@ Streamlit dashboard for prioritizing open Salesforce support cases. The app pull
 │   ├── WeightageMeter.py
 │   ├── OngoingSLABreaches.py
 │   └── Sentiment_analysis.py
-├── archive
-│   └── Reporttopleft.py
 ├── services
+│   ├── background_case_refresh_service.py
+│   ├── case_analyst_service.py
+│   ├── case_priority_snapshot_service.py
 │   ├── case_service.py
-│   ├── snowflake_service.py
+│   ├── notification_service.py
 │   ├── openai_service.py
-│   ├── geminiai_service.py
-│   └── googlesheet_service.py
+│   └── snowflake_service.py
+├── jobs
+│   ├── case_change_notification_job.py
+│   └── shift_digest_notification_job.py
 ├── config
 │   ├── settings.py
 │   └── delinea_loader.py
@@ -214,15 +217,9 @@ OPENAI_API_KEY
 Other currently loaded settings:
 
 ```text
-BACKGROUND_REFRESH_SECONDS
-GCS_SLACK_ENABLED
-GCS_SLACK_TEST_ONLY
-GCS_SLACK_DRY_RUN
-GCS_SLACK_DIGEST_CASES_PER_MESSAGE
 GCS_CASE_ANALYST_TABLE
 GCS_SALESFORCE_CASE_URL
 GCS_DASHBOARD_URL
-GEMINI_API_KEY
 APTEDGE_API_KEY
 APTEDGE_BASE_URL
 APTEDGE_MODEL
@@ -861,6 +858,33 @@ Check:
 - The app can reach the OpenAI API.
 - The model name `gpt-4o-mini` is available for the configured key.
 
+## Snowflake and Slack Setup
+
+The application uses database `CUSTOMER_SUPPORT_BOT_LOGS`, schema `CHAT_DATA`,
+and Snowflake role `JIRA_ENG_ANALYST`.
+
+Required application-managed Snowflake objects:
+
+- `DBD_GCS_NOTIFICATION_RUNS` prevents duplicate shift-digest runs.
+- `DBD_GCS_CASE_NOTIFICATION_AUDIT` records successful use-case-two and
+  use-case-three Slack case events. Shift digests are excluded.
+- `DBD_GCS_CASE_NOTIFICATION_SUMMARY` provides daily, weekly, and monthly IST
+  reporting by analyst and notification type.
+- `DBD_GCS_CASE_PRIORITY_SNAPSHOT` holds the current Case Priority Index for
+  downstream systems and is synchronized after every successful background
+  refresh.
+
+Slack notifications are enabled in application code and currently scoped to
+NA East. Shift digests run on weekdays at APAC 06:00, EMEA 14:00, NA East
+18:00, and NA West 21:00 IST. The Slack bot token is loaded from Delinea folder
+`433`, secret `Agentic Support Slack Bot`, field `API Key`; it is never stored
+in this repository.
+
+Before deployment, confirm that all required Snowflake objects exist, active
+analysts have exact-name email mappings in `SF_CASE_ANALYST`, dependencies are
+installed into the server `.venv`, and the service account can read and write
+the required objects.
+
 ## Security Notes
 
 - `.env`, `.env.local`, and credential files are ignored by git.
@@ -872,7 +896,6 @@ Check:
 ## Current Known Implementation Notes
 
 - Salesforce owner names and regions are loaded from `DBD_OWNER_DATA`.
-- `archive/Reporttopleft.py` is archived legacy code and is not imported by the active app.
 - Due Date SLA gating starts SLA the next day at `06:00 IST`.
 - Sentiment uses Chat Completions, not the Responses API.
 - The dashboard reads sentiment from Snowflake; it does not call OpenAI directly.

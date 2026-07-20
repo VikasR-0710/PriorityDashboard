@@ -4,8 +4,9 @@ import json
 import logging
 import re
 import threading
+import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping
 
 import pytz
@@ -22,6 +23,7 @@ class SlackDeliveryResult:
     sent: bool
     skipped: bool = False
     slack_user_id: str | None = None
+    slack_message_ts: str | None = None
     error: str | None = None
 
 
@@ -97,7 +99,11 @@ class SlackNotificationService:
                 blocks=blocks,
             )
             if response.get("ok"):
-                return SlackDeliveryResult(True, slack_user_id=user_id)
+                return SlackDeliveryResult(
+                    True,
+                    slack_user_id=user_id,
+                    slack_message_ts=str(response.get("ts") or "") or None,
+                )
             return SlackDeliveryResult(False, slack_user_id=user_id, error="Slack rejected message")
         except Exception as exc:
             logger.exception("Slack notification failed")
@@ -361,7 +367,11 @@ class SlackNotificationService:
                 blocks=blocks,
             )
             if response.get("ok"):
-                return SlackDeliveryResult(True, slack_user_id=user_id)
+                return SlackDeliveryResult(
+                    True,
+                    slack_user_id=user_id,
+                    slack_message_ts=str(response.get("ts") or "") or None,
+                )
             return SlackDeliveryResult(False, slack_user_id=user_id, error="Slack rejected message")
         except Exception as exc:
             logger.exception("Slack case change alert failed")
@@ -422,42 +432,6 @@ class SlackNotificationService:
             cursor = response.get("response_metadata", {}).get("next_cursor")
             if not cursor:
                 return None
-
-
-@dataclass(frozen=True)
-class NotificationCandidate:
-    case: Mapping[str, Any]
-    notification_type: str = "GCS_PRIORITY"
-
-
-class NotificationRuleService:
-    """Evaluates notification eligibility without performing any I/O."""
-
-    def __init__(self, settings: GCSNotificationSettings = gcs_notification_settings):
-        self.settings = settings
-
-    def evaluate(self, case: Mapping[str, Any]) -> NotificationCandidate | None:
-        score = case.get("Case Score")
-        if self.settings.score_threshold is not None:
-            try:
-                if score is None or float(score) < self.settings.score_threshold:
-                    return None
-            except (TypeError, ValueError):
-                return None
-
-        if self.settings.immediate_attention_only:
-            priority = str(
-                case.get("Prioritization")
-                or case.get("Priority Category")
-                or case.get("Priority")
-                or ""
-            ).strip().lower()
-            if priority != "need immediate attention":
-                return None
-
-        if self.settings.score_threshold is None and not self.settings.immediate_attention_only:
-            return None
-        return NotificationCandidate(case=case)
 
 
 def _safe_identifier(value: str) -> str:
@@ -537,73 +511,80 @@ class NotificationRunService:
             conn.close()
 
 
-class NotificationTrackingService:
-    """Provides throttling and atomic notification result tracking in Snowflake."""
+class CaseNotificationAuditService:
+    """Writes use-case-two and use-case-three Slack delivery history to Snowflake."""
 
     def __init__(
         self,
         settings: GCSNotificationSettings = gcs_notification_settings,
         snowflake: SnowflakeService | None = None,
     ):
-        self.settings = settings
+        self.table = _safe_identifier(settings.case_notification_audit_table)
         self.snowflake = snowflake or SnowflakeService()
-        self.table = _safe_identifier(settings.notifications_table)
 
-    def should_send(self, case_number: str, notification_type: str) -> bool:
-        conn = self.snowflake.connect()
-        cursor = conn.cursor()
-        try:
-            cursor.execute(
-                f"SELECT LAST_NOTIFIED_AT FROM {self.table} "
-                "WHERE CASE_NUMBER = %s AND NOTIFICATION_TYPE = %s",
-                (case_number, notification_type),
-            )
-            row = cursor.fetchone()
-            if not row or row[0] is None:
-                return True
-            last_notified = row[0]
-            if last_notified.tzinfo is not None:
-                last_notified = last_notified.astimezone(timezone.utc).replace(tzinfo=None)
-            elapsed_hours = (
-                datetime.now(timezone.utc).replace(tzinfo=None) - last_notified
-            ).total_seconds() / 3600
-            return elapsed_hours >= self.settings.reminder_hours
-        finally:
-            cursor.close()
-            conn.close()
-
-    def record_result(
+    def record_delivery(
         self,
-        case_number: str,
-        notification_type: str,
-        recipient_email: str | None,
-        sent: bool,
-        slack_user_id: str | None = None,
-        error: str | None = None,
-    ) -> None:
-        conn = self.snowflake.connect()
+        events: list[Mapping[str, Any]],
+        analyst_name: str,
+        analyst_email: str | None,
+        slack_user_id: str | None,
+        slack_message_ts: str | None,
+    ) -> int:
+        if not events:
+            return 0
+
+        delivery_id = str(uuid.uuid4())
+        rows = []
+        for event in events:
+            rows.append((
+                str(uuid.uuid4()),
+                delivery_id,
+                event.get("use_case"),
+                event.get("notification_type"),
+                event.get("case_number"),
+                analyst_name,
+                analyst_email,
+                event.get("region"),
+                event.get("customer_name"),
+                event.get("previous_owner"),
+                event.get("current_owner"),
+                event.get("previous_priority"),
+                event.get("current_priority"),
+                event.get("previous_status"),
+                event.get("current_status"),
+                event.get("previous_escalated"),
+                event.get("current_escalated"),
+                slack_user_id,
+                slack_message_ts,
+            ))
+
+        conn = self.snowflake.connect(
+            warehouse="CS_BOT_WH",
+            database="CUSTOMER_SUPPORT_BOT_LOGS",
+            schema="CHAT_DATA",
+        )
         cursor = conn.cursor()
         try:
-            cursor.execute(
-                f"""MERGE INTO {self.table} t
-                USING (SELECT %s CASE_NUMBER, %s NOTIFICATION_TYPE) s
-                ON t.CASE_NUMBER = s.CASE_NUMBER AND t.NOTIFICATION_TYPE = s.NOTIFICATION_TYPE
-                WHEN MATCHED THEN UPDATE SET
-                    RECIPIENT_EMAIL = %s, NOTIFICATION_SENT = %s, SLACK_USER_ID = %s,
-                    ERROR_MESSAGE = %s, LAST_ATTEMPT_AT = CURRENT_TIMESTAMP(),
-                    LAST_NOTIFIED_AT = IFF(%s, CURRENT_TIMESTAMP(), t.LAST_NOTIFIED_AT)
-                WHEN NOT MATCHED THEN INSERT
-                    (CASE_NUMBER, NOTIFICATION_TYPE, RECIPIENT_EMAIL, NOTIFICATION_SENT,
-                     SLACK_USER_ID, ERROR_MESSAGE, LAST_ATTEMPT_AT, LAST_NOTIFIED_AT)
-                VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP(),
-                        IFF(%s, CURRENT_TIMESTAMP(), NULL))""",
-                (
-                    case_number, notification_type, recipient_email, sent, slack_user_id,
-                    error[:1000] if error else None, sent, case_number, notification_type,
-                    recipient_email, sent, slack_user_id, error[:1000] if error else None, sent,
-                ),
+            cursor.executemany(
+                f"""INSERT INTO {self.table} (
+                    EVENT_ID, DELIVERY_ID, USE_CASE, NOTIFICATION_TYPE,
+                    CASE_NUMBER, ANALYST_NAME, ANALYST_EMAIL, REGION,
+                    CUSTOMER_NAME, PREVIOUS_OWNER, CURRENT_OWNER,
+                    PREVIOUS_PRIORITY, CURRENT_PRIORITY,
+                    PREVIOUS_STATUS, CURRENT_STATUS,
+                    PREVIOUS_ESCALATED, CURRENT_ESCALATED,
+                    SLACK_USER_ID, SLACK_MESSAGE_TS
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )""",
+                rows,
             )
             conn.commit()
+            return len(rows)
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             cursor.close()
             conn.close()

@@ -26,12 +26,6 @@ OPENAI_API_KEY = os.getenv(
     "OPENAI_API_KEY"
 )
 
-GEMINI_API_KEY = os.getenv(
-    "GEMINI_API_KEY"
-)
-
-
-
 APTEDGE_API_KEY = os.getenv(
     "APTEDGE_API_KEY"
 )
@@ -43,13 +37,6 @@ APTEDGE_BASE_URL = os.getenv(
 APTEDGE_MODEL = os.getenv(
     "APTEDGE_MODEL"
 )
-
-
-def _bool_env(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -67,21 +54,10 @@ class GCSNotificationSettings:
         "GCS_CASE_ANALYST_TABLE",
         "CUSTOMER_SUPPORT_BOT_LOGS.CHAT_DATA.SF_CASE_ANALYST",
     )
-    reminder_hours: int = int(os.getenv("GCS_NOTIFICATION_REMINDER_HOURS", "24"))
-    score_threshold: float | None = (
-        float(os.environ["GCS_NOTIFICATION_SCORE_THRESHOLD"])
-        if os.getenv("GCS_NOTIFICATION_SCORE_THRESHOLD")
-        else None
-    )
-    immediate_attention_only: bool = _bool_env(
-        "GCS_NOTIFICATION_IMMEDIATE_ATTENTION_ONLY", False
-    )
-    notifications_table: str = os.getenv(
-        "GCS_NOTIFICATION_TABLE", "DBD_GCS_NOTIFICATIONS"
-    )
     runs_table: str = os.getenv(
         "GCS_NOTIFICATION_RUNS_TABLE", "DBD_GCS_NOTIFICATION_RUNS"
     )
+    case_notification_audit_table: str = "DBD_GCS_CASE_NOTIFICATION_AUDIT"
 
 
 gcs_notification_settings = GCSNotificationSettings()

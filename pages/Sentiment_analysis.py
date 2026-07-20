@@ -5,6 +5,7 @@ and UPSERTS sentiment results into Snowflake table DBD_SENTIMENT_DATA.
 """
 import json
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ LOG_DIR = setup_daily_logging()
 # 🛠️ CONFIGURATION (Environment Variables)
 # ---------------------------------------------------------------------------
 TARGET_TABLE = "DBD_SENTIMENT_DATA"
+REFERENCE_SENTIMENT_TABLE = "SENTIMENT_ANALYSIS_RESULTS_72H"
 USAGE_TABLE = "OPENAI_LLM_USAGE"
 AGENT_NAME = "gcs_prioritization_index"
 OPENAI_OPERATION = "chat.completions.sentiment"
@@ -28,6 +30,24 @@ PRICING_TIER = "standard"
 PRICE_SOURCE = "https://developers.openai.com/api/docs/pricing?latest-pricing=standard"
 OPENAI_DELAY = 0.5
 VALID_SENTIMENTS = {"Positive", "Neutral", "Negative", "Critical"}
+
+REFERENCE_SENTIMENT_MAP = {
+    "positive": "Positive",
+    "happy": "Positive",
+    "happy/positive": "Positive",
+    "thanksful": "Positive",
+    "thankful": "Positive",
+    "cooperative": "Positive",
+    "neutral": "Neutral",
+    "anxious": "Negative",
+    "concerned": "Negative",
+    "confused/anxious": "Negative",
+    "curious": "Negative",
+    "confused": "Negative",
+    "frustrated/disappointed": "Critical",
+    "angry": "Critical",
+    "frustrated": "Critical",
+}
 
 
 class MissingBatchSentimentError(ValueError):
@@ -54,6 +74,84 @@ def get_pipeline_snowflake_connection():
         database=os.getenv("SNOWFLAKE_DATABASE", "CUSTOMER_SUPPORT_BOT_LOGS"),
         schema=os.getenv("SNOWFLAKE_SCHEMA", "CHAT_DATA")
     )
+
+
+def map_reference_sentiment(value):
+    normalized = re.sub(r"\s+", " ", str(value or "").strip().casefold())
+    normalized = re.sub(r"\s*/\s*", "/", normalized)
+    return REFERENCE_SENTIMENT_MAP.get(normalized)
+
+
+def fetch_latest_reference_sentiments(case_numbers):
+    case_numbers = sorted({str(number).strip() for number in case_numbers if str(number).strip()})
+    if not case_numbers:
+        return {}
+
+    conn = get_pipeline_snowflake_connection()
+    cursor = conn.cursor()
+    try:
+        placeholders = ", ".join(["%s"] * len(case_numbers))
+        cursor.execute(
+            f"""SELECT CASE_NUMBER, SENTIMENT
+            FROM {REFERENCE_SENTIMENT_TABLE}
+            WHERE CASE_NUMBER IN ({placeholders})
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY CASE_NUMBER
+                ORDER BY CREATED_AT DESC NULLS LAST, ID DESC
+            ) = 1""",
+            tuple(case_numbers),
+        )
+        return {str(case_number): sentiment for case_number, sentiment in cursor.fetchall()}
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def compare_with_reference_sentiments(data):
+    """Compare against the latest 72H value; OpenAI remains authoritative."""
+    if not data:
+        return data
+    try:
+        reference = fetch_latest_reference_sentiments(
+            item.get("CaseNumber") for item in data
+        )
+    except Exception as exc:
+        print(f"⚠️ Reference sentiment comparison skipped: {exc}")
+        return data
+
+    matches = 0
+    mismatches = 0
+    missing = 0
+    unmapped = 0
+    for item in data:
+        case_number = str(item.get("CaseNumber") or "")
+        openai_sentiment = normalize_sentiment(item.get("Sentiment"))
+        raw_reference = reference.get(case_number)
+        if raw_reference is None:
+            missing += 1
+            continue
+        mapped_reference = map_reference_sentiment(raw_reference)
+        if mapped_reference is None:
+            unmapped += 1
+            print(
+                f"⚠️ Unmapped 72H sentiment for case {case_number}: {raw_reference!r}"
+            )
+            continue
+        if mapped_reference == openai_sentiment:
+            matches += 1
+        else:
+            mismatches += 1
+            print(
+                f"ℹ️ Sentiment mismatch for {case_number}: "
+                f"OpenAI={openai_sentiment}, 72H={mapped_reference}; using OpenAI."
+            )
+
+    print(
+        "🔎 72H sentiment comparison: "
+        f"matches={matches}, mismatches={mismatches}, "
+        f"missing={missing}, unmapped={unmapped}"
+    )
+    return data
 
 
 def upsert_to_snowflake(data):
@@ -242,19 +340,31 @@ def chunked(items, size):
         yield start, items[start:start + size]
 
 
-def build_case_payload(case_record):
+def get_latest_customer_comment(case_record):
+    """Return only the newest published comment not written by a support owner."""
     comments_records = (case_record.get("CaseComments") or {}).get("records", [])
-    comments = [
-        {
-            "created_by": c.get("CreatedBy", {}).get("Name", "Unknown"),
-            "comment": c.get("CommentBody", ""),
-        }
-        for c in comments_records[:10]
-    ]
+    support_names = {
+        str(name).strip().casefold()
+        for name in get_owner_region_map().keys()
+        if str(name).strip()
+    }
+    for comment in comments_records:
+        author = str((comment.get("CreatedBy") or {}).get("Name") or "").strip()
+        body = str(comment.get("CommentBody") or "").strip()
+        if author and body and author.casefold() not in support_names:
+            return {"created_by": author, "comment": body}
+    return None
+
+
+def build_case_payload(case_record):
+    latest_customer_comment = get_latest_customer_comment(case_record)
     return {
         "case_number": case_record.get("CaseNumber", "UNKNOWN"),
         "subject": case_record.get("Subject"),
-        "recent_comments": comments or [{"created_by": "N/A", "comment": "No published comments available."}],
+        "latest_customer_comment": latest_customer_comment or {
+            "created_by": "N/A",
+            "comment": "No published customer comment available.",
+        },
     }
 
 
@@ -389,21 +499,25 @@ def fetch_salesforce_cases():
     return sf.query_all(query)["records"]
 
 def analyze_sentiment(case_record, openai_client, usage_conn=None):
-    comments_records = (case_record.get("CaseComments") or {}).get("records", [])
-    comments_text = " | ".join([f"{c.get('CreatedBy', {}).get('Name', 'Unknown')}: {c.get('CommentBody', '')}" for c in comments_records[:10]]) or "No published comments available."
+    latest_customer_comment = get_latest_customer_comment(case_record)
+    if not latest_customer_comment:
+        return "Neutral"
+    customer_comment_text = (
+        latest_customer_comment["comment"]
+    )
     case_num = case_record.get("CaseNumber", "UNKNOWN")
     metadata = {
         "case_number": case_num,
         "case_id": case_record.get("Id"),
         "operation": "sentiment_analysis",
         "api_type": "chat_completions",
-        "comments_count": len(comments_records),
+        "comments_count": 1 if latest_customer_comment else 0,
     }
     
     prompt = f"""Analyze this Salesforce support case.
 Case Number: {case_num}
 Subject: {case_record.get("Subject")}
-Recent Comments: {comments_text}
+Latest Customer Comment: {customer_comment_text}
 Return ONLY one word: Positive, Neutral, Negative, or Critical."""
     
     started_at = time.perf_counter()
@@ -438,8 +552,22 @@ Return ONLY one word: Positive, Neutral, Negative, or Critical."""
         return "Analysis Error"
 
 def prepare_and_upsert(cases, openai_client):
+    cases_with_customer_comment = []
     processed = []
+    for case in cases:
+        if get_latest_customer_comment(case):
+            cases_with_customer_comment.append(case)
+        else:
+            processed.append({
+                "CaseNumber": case.get("CaseNumber", "UNKNOWN"),
+                "Sentiment": "Neutral",
+            })
+    cases = cases_with_customer_comment
     total = len(cases)
+    if not cases:
+        print("ℹ️ No customer comments found; storing Neutral sentiment.")
+        upsert_to_snowflake(compare_with_reference_sentiments(processed))
+        return
     usage_conn = None
     print(f"🧠 Starting AI analysis for {total} cases in batches of {OPENAI_BATCH_SIZE}...")
     try:
@@ -468,7 +596,7 @@ def prepare_and_upsert(cases, openai_client):
         if usage_conn:
             usage_conn.close()
 
-    upsert_to_snowflake(processed)
+    upsert_to_snowflake(compare_with_reference_sentiments(processed))
 
 def main():
     print("🚀 Starting Case Sentiment Analysis & Snowflake Ingestion")

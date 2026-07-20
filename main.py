@@ -87,6 +87,7 @@ try:
     from jobs.case_change_notification_job import CaseChangeNotificationJob
     from config.settings import gcs_notification_settings
     from services.background_case_refresh_service import BackgroundCaseRefreshService
+    from services.case_priority_snapshot_service import CasePrioritySnapshotService
     from services.notification_service import ShiftNotificationScheduler
 except ImportError as e:
     st.error(f"❌ Import Error: {e}. Please check your file structure.")
@@ -106,7 +107,20 @@ BACKGROUND_REFRESH_LABEL = (
 def get_case_change_notification_job():
     return CaseChangeNotificationJob()
 
+@st.cache_resource
+def get_case_priority_snapshot_service():
+    return CasePrioritySnapshotService()
+
 def notify_case_changes(previous_snapshot, current_snapshot):
+    try:
+        snapshot_stats = get_case_priority_snapshot_service().sync(
+            current_snapshot.dataframe,
+            datetime.fromtimestamp(current_snapshot.refreshed_at, tz=pytz.utc),
+        )
+        print(f"GCS case priority snapshot sync: {snapshot_stats}")
+    except Exception as exc:
+        print(f"⚠️ GCS case priority snapshot sync failed: {exc}")
+
     if not gcs_notification_settings.enabled or gcs_notification_settings.test_only:
         return
     stats = get_case_change_notification_job().run(
