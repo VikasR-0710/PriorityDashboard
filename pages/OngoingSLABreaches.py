@@ -180,6 +180,9 @@ def _merge_sla_breach_rows(conn, rows):
     cur = conn.cursor()
     temp_table_name = "TEMP_SLA_BREACH_IMPACT_" + str(int(time.time()))
     try:
+        cur.execute(f"""ALTER TABLE {SLA_BREACH_IMPACT_TABLE}
+            ADD COLUMN IF NOT EXISTS IST_TIMESTAMP TIMESTAMP_NTZ DEFAULT
+            CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ""")
         cur.execute(f"""
             CREATE OR REPLACE TEMPORARY TABLE {temp_table_name} (
                 RECORD_TYPE STRING, SNAPSHOT_DATE DATE, SNAPSHOT_TIMESTAMP TIMESTAMP_NTZ,
@@ -227,13 +230,14 @@ def _merge_sla_breach_rows(conn, rows):
                 SUBJECT = source.SUBJECT,
                 IMPACT_REASON = source.IMPACT_REASON,
                 PREVIOUS_SLA_STATUS = source.PREVIOUS_SLA_STATUS,
-                CURRENT_SLA_STATUS = source.CURRENT_SLA_STATUS
+                CURRENT_SLA_STATUS = source.CURRENT_SLA_STATUS,
+                IST_TIMESTAMP = CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ
             WHEN NOT MATCHED THEN INSERT (
                 RECORD_TYPE, SNAPSHOT_DATE, SNAPSHOT_TIMESTAMP, CASE_NUMBER, CUSTOMER_NAME,
                 CASE_OWNER, SEVERITY, SUPPORT_LEVEL, SUPPORT_TIER, SALESFORCE_STATUS,
                 SLA_STATUS, SLA_DEADLINE, LAST_CUSTOMER_COMMENT, SLA_VARIANCE_MINS,
                 BREACH_MONTH, IS_HEAL_DESK, SUBJECT, IMPACT_STATUS, IMPACT_REASON,
-                PREVIOUS_SLA_STATUS, CURRENT_SLA_STATUS
+                PREVIOUS_SLA_STATUS, CURRENT_SLA_STATUS, IST_TIMESTAMP
             ) VALUES (
                 source.RECORD_TYPE, source.SNAPSHOT_DATE, source.SNAPSHOT_TIMESTAMP,
                 source.CASE_NUMBER, source.CUSTOMER_NAME, source.CASE_OWNER,
@@ -242,7 +246,8 @@ def _merge_sla_breach_rows(conn, rows):
                 source.LAST_CUSTOMER_COMMENT, source.SLA_VARIANCE_MINS,
                 source.BREACH_MONTH, source.IS_HEAL_DESK, source.SUBJECT,
                 source.IMPACT_STATUS, source.IMPACT_REASON,
-                source.PREVIOUS_SLA_STATUS, source.CURRENT_SLA_STATUS
+                source.PREVIOUS_SLA_STATUS, source.CURRENT_SLA_STATUS,
+                CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ
             )
         """)
         conn.commit()

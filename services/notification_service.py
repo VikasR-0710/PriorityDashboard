@@ -459,8 +459,15 @@ class NotificationRunService:
                 COMPLETED_AT TIMESTAMP_TZ,
                 STATUS VARCHAR,
                 STATS VARIANT,
-                ERROR_MESSAGE VARCHAR
+                ERROR_MESSAGE VARCHAR,
+                IST_TIMESTAMP TIMESTAMP_NTZ DEFAULT
+                    CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ
             )"""
+        )
+        cursor.execute(
+            f"""ALTER TABLE {self.table} ADD COLUMN IF NOT EXISTS
+            IST_TIMESTAMP TIMESTAMP_NTZ DEFAULT
+            CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ"""
         )
 
     def try_start(self, run_id: str) -> bool:
@@ -502,6 +509,7 @@ class NotificationRunService:
                 f"""UPDATE {self.table}
                 SET COMPLETED_AT = CURRENT_TIMESTAMP(), STATUS = %s,
                     STATS = PARSE_JSON(%s), ERROR_MESSAGE = %s
+                    , IST_TIMESTAMP = CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ
                 WHERE RUN_ID = %s""",
                 (status, json.dumps(stats or {}), error[:1000] if error else None, run_id),
             )
@@ -565,6 +573,11 @@ class CaseNotificationAuditService:
         )
         cursor = conn.cursor()
         try:
+            cursor.execute(
+                f"""ALTER TABLE {self.table} ADD COLUMN IF NOT EXISTS
+                IST_TIMESTAMP TIMESTAMP_NTZ DEFAULT
+                CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ"""
+            )
             cursor.executemany(
                 f"""INSERT INTO {self.table} (
                     EVENT_ID, DELIVERY_ID, USE_CASE, NOTIFICATION_TYPE,

@@ -164,6 +164,11 @@ def upsert_to_snowflake(data):
     
     cursor = conn.cursor()
     try:
+        cursor.execute(
+            f"ALTER TABLE {TARGET_TABLE} ADD COLUMN IF NOT EXISTS "
+            "IST_TIMESTAMP TIMESTAMP_NTZ DEFAULT "
+            "CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ"
+        )
         print(f"📤 Upserting {len(data)} records into {TARGET_TABLE}...")
         values_list = []
         for d in data:
@@ -176,8 +181,12 @@ def upsert_to_snowflake(data):
         MERGE INTO {TARGET_TABLE} AS target
         USING (SELECT column1 AS CaseNumber, column2 AS Sentiment FROM VALUES {values_str}) AS source (CaseNumber, Sentiment)
         ON target.CaseNumber = source.CaseNumber
-        WHEN MATCHED THEN UPDATE SET target.Sentiment = source.Sentiment
-        WHEN NOT MATCHED THEN INSERT (CaseNumber, Sentiment) VALUES (source.CaseNumber, source.Sentiment)
+        WHEN MATCHED THEN UPDATE SET
+            target.Sentiment = source.Sentiment,
+            target.IST_TIMESTAMP = CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ
+        WHEN NOT MATCHED THEN INSERT (CaseNumber, Sentiment, IST_TIMESTAMP)
+            VALUES (source.CaseNumber, source.Sentiment,
+                    CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ)
         """
         cursor.execute(merge_query)
         conn.commit()

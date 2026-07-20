@@ -132,6 +132,11 @@ class CasePrioritySnapshotService:
         )
         cursor = conn.cursor()
         try:
+            cursor.execute(
+                f"ALTER TABLE {self.table} ADD COLUMN IF NOT EXISTS "
+                "IST_TIMESTAMP TIMESTAMP_NTZ DEFAULT "
+                "CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ"
+            )
             cursor.execute(f"CREATE TEMPORARY TABLE {stage} LIKE {self.table}")
             column_list = ", ".join(self.COLUMNS)
             placeholders = ", ".join(["%s"] * len(self.COLUMNS))
@@ -151,11 +156,13 @@ class CasePrioritySnapshotService:
                 USING {stage} source
                 ON target.CASE_NUMBER = source.CASE_NUMBER
                 WHEN MATCHED THEN UPDATE SET
-                    {update_clause}, target.UPDATED_AT = CURRENT_TIMESTAMP()
+                    {update_clause}, target.UPDATED_AT = CURRENT_TIMESTAMP(),
+                    target.IST_TIMESTAMP = CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ
                 WHEN NOT MATCHED THEN INSERT
-                    ({column_list}, CREATED_AT, UPDATED_AT)
+                    ({column_list}, CREATED_AT, UPDATED_AT, IST_TIMESTAMP)
                 VALUES
-                    ({insert_values}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())"""
+                    ({insert_values}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(),
+                     CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ)"""
             )
             cursor.execute(
                 f"""DELETE FROM {self.table} target
