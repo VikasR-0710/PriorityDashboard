@@ -13,6 +13,7 @@ from services.snowflake_service import SnowflakeService # <-- ADDED IMPORT
 
 ALL_REGIONS_OPTION = "ALL"
 ALL_PRIORITY_OPTION = "All priority"
+ALL_SUPPORT_LEVELS_OPTION = "All support levels"
 LOW_PRIORITY_RECORD_TYPES = {
     "Decommission Request",
     "Customer Communication",
@@ -659,9 +660,24 @@ def normalize_priority_filter_selection():
     st.session_state.sla_filter = selected
     st.session_state.selected_sla_status = selected
 
+def normalize_support_level_filter_selection():
+    selected = list(st.session_state.get("support_level_filter", []))
+    previous = list(st.session_state.get(
+        "selected_support_levels", [ALL_SUPPORT_LEVELS_OPTION]
+    ))
+
+    if ALL_SUPPORT_LEVELS_OPTION in selected and len(selected) > 1:
+        if ALL_SUPPORT_LEVELS_OPTION in previous:
+            selected = [level for level in selected if level != ALL_SUPPORT_LEVELS_OPTION]
+        else:
+            selected = [ALL_SUPPORT_LEVELS_OPTION]
+
+    st.session_state.support_level_filter = selected
+    st.session_state.selected_support_levels = selected
+
 def apply_filters_and_ranking(df):
-    # 🎯 Compact 4-column layout for perfect alignment
-    c1, c2, c3, c4 = st.columns([1.0, 1.0, 1.0, 1.0])
+    # Compact, evenly aligned filter bar.
+    c1, c2, c3, c4, c5 = st.columns([1.0, 1.0, 1.0, 1.0, 1.0])
     owner_region_map = get_owner_region_map()
     
     with c1:
@@ -685,10 +701,41 @@ def apply_filters_and_ranking(df):
         cur = [owner for owner in cur if owner in avail_owners]
         st.session_state.owner_filter = cur
         st.session_state.selected_owners = cur
-        sel_owners = st.multiselect("Owner", avail_owners, default=cur, key="owner_filter", label_visibility="collapsed",placeholder="Select Name")
+        sel_owners = st.multiselect(
+            "Owner",
+            avail_owners,
+            key="owner_filter",
+            label_visibility="collapsed",
+            placeholder="Select Name",
+        )
         st.session_state.selected_owners = sel_owners
         
     with c3:
+        support_levels = sorted(
+            str(level).strip()
+            for level in df.get("Support Level", pd.Series(dtype=str)).dropna().unique()
+            if str(level).strip()
+        )
+        support_options = [ALL_SUPPORT_LEVELS_OPTION] + support_levels
+        selected_support = list(st.session_state.get(
+            "support_level_filter", [ALL_SUPPORT_LEVELS_OPTION]
+        ))
+        selected_support = [
+            level for level in selected_support if level in support_options
+        ] or [ALL_SUPPORT_LEVELS_OPTION]
+        st.session_state.support_level_filter = selected_support
+        st.session_state.selected_support_levels = selected_support
+        sel_support_levels = st.multiselect(
+            "Support Level",
+            support_options,
+            key="support_level_filter",
+            on_change=normalize_support_level_filter_selection,
+            label_visibility="collapsed",
+            placeholder="🎧 Support Level",
+        )
+        st.session_state.selected_support_levels = sel_support_levels
+
+    with c4:
         cats = [ALL_PRIORITY_OPTION, "Need Immediate Attention", "Need Secondary Attention"]
         if "sla_filter" not in st.session_state:
             st.session_state.sla_filter = st.session_state.get("selected_sla_status", [ALL_PRIORITY_OPTION])
@@ -702,7 +749,7 @@ def apply_filters_and_ranking(df):
         sel_sla = st.multiselect("Prioritization", cats, key="sla_filter", on_change=normalize_priority_filter_selection, label_visibility="collapsed",placeholder="Know Priority Cases")
         st.session_state.selected_sla_status = sel_sla
         
-    with c4:
+    with c5:
         # 🎯 Sleek Search Bar with integrated clear button
         search_query = st.text_input(
             "Search",
@@ -733,6 +780,11 @@ def apply_filters_and_ranking(df):
         return df.iloc[:0], [], search_query, st.session_state.get("heal_desk_toggle", False)
     
     filtered = df[df["Case Owner"].isin(sel_owners)] if sel_owners else df
+
+    if sel_support_levels and ALL_SUPPORT_LEVELS_OPTION not in sel_support_levels:
+        filtered = filtered[
+            filtered["Support Level"].astype(str).str.strip().isin(sel_support_levels)
+        ].copy()
     
     # 🎯 Apply Heal Desk Filter
     is_heal_desk_filter = st.session_state.get("heal_desk_toggle", False)
