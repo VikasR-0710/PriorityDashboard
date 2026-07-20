@@ -80,7 +80,8 @@ try:
         get_processed_data, 
         apply_filters_and_ranking, 
         render_table,
-        sync_audit_history
+        sync_audit_history,
+        fetch_owner_config,
     )
     from pages.WeightageMeter import render_chart
     from pages.OngoingSLABreaches import render_30_day_chart, sync_sla_breach_impact_history
@@ -240,6 +241,7 @@ def refresh_dashboard():
     # Stop the current cycle and begin a new configured refresh window. The foreground
     # reload below is isolated by its own token, so it cannot race with the worker.
     background_case_refresh.restart(run_immediately=False)
+    fetch_owner_config.clear()
     keys_to_clear = ['ui_case_snapshot', 'audit_synced', 'sla_breach_impact_synced', 'dashboard_loaded']
     for key in keys_to_clear:
         if key in st.session_state: del st.session_state[key]

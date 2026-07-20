@@ -679,10 +679,12 @@ def apply_filters_and_ranking(df):
     avail_owners = sorted(o for o, r in owner_region_map.items() if r in active_regions) if active_regions else []
     
     with c2:
-        cur = st.session_state.get("selected_owners", [])
-        if any(o not in avail_owners for o in cur):
-            if "selected_owners" in st.session_state: del st.session_state.selected_owners
-            st.rerun()
+        cur = list(st.session_state.get(
+            "owner_filter", st.session_state.get("selected_owners", [])
+        ))
+        cur = [owner for owner in cur if owner in avail_owners]
+        st.session_state.owner_filter = cur
+        st.session_state.selected_owners = cur
         sel_owners = st.multiselect("Owner", avail_owners, default=cur, key="owner_filter", label_visibility="collapsed",placeholder="Select Name")
         st.session_state.selected_owners = sel_owners
         
