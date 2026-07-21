@@ -108,7 +108,7 @@ def fetch_latest_reference_sentiments(case_numbers):
 
 
 def compare_with_reference_sentiments(data):
-    """Compare against the latest 72H value; OpenAI remains authoritative."""
+    """Use the latest mapped 72H sentiment when it differs from OpenAI."""
     if not data:
         return data
     try:
@@ -141,9 +141,10 @@ def compare_with_reference_sentiments(data):
             matches += 1
         else:
             mismatches += 1
+            item["Sentiment"] = mapped_reference
             print(
                 f"ℹ️ Sentiment mismatch for {case_number}: "
-                f"OpenAI={openai_sentiment}, 72H={mapped_reference}; using OpenAI."
+                f"OpenAI={openai_sentiment}, 72H={mapped_reference}; using 72H."
             )
 
     print(
