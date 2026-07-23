@@ -9,13 +9,13 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
-from config.logging_setup import setup_daily_logging
+from config.logging_setup import setup_snowflake_logging
 from services.case_service import CaseService
 from services.openai_service import OpenAIService
 from services.snowflake_service import SnowflakeService
 from pages.CasePriorityIndex import get_owner_region_map, build_owner_name_filter
 
-LOG_DIR = setup_daily_logging()
+LOG_TABLE = setup_snowflake_logging()
 
 # ---------------------------------------------------------------------------
 # 🛠️ CONFIGURATION (Environment Variables)

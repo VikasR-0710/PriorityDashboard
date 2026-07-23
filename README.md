@@ -899,7 +899,7 @@ the required objects.
 - Due Date SLA gating starts SLA the next day at `06:00 IST`.
 - Sentiment uses Chat Completions, not the Responses API.
 - The dashboard reads sentiment from Snowflake; it does not call OpenAI directly.
-- When a valid latest 72-hour reference sentiment differs from OpenAI, the 72-hour sentiment overrides OpenAI before the result is stored. OpenAI is used when the reference is missing or unmapped.
+- `SENTIMENT_ANALYSIS_RESULTS_72H` is the authoritative sentiment source. When its latest valid mapped sentiment differs from OpenAI, its value overrides OpenAI before storage. OpenAI is used only when the table has no value or its value cannot be mapped.
 - The sentiment scheduler runs per Streamlit session.
 - SLA breach impact sync runs daily at `6 PM IST`.
 - Heal Desk filtering is applied after cases are pulled from Salesforce.

@@ -10,10 +10,10 @@ from datetime import datetime, timedelta
 
 sys.path.append(os.getcwd())
 
-from config.logging_setup import setup_daily_logging
+from config.logging_setup import setup_snowflake_logging
 
-LOG_DIR = setup_daily_logging()
-print(f"Daily logs enabled at: {LOG_DIR}")
+LOG_TABLE = setup_snowflake_logging()
+print(f"Snowflake application logging enabled at: {LOG_TABLE}")
 
 # -------------------------------------------------------
 # 📦 PAGE CONFIG
