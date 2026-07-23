@@ -94,20 +94,28 @@ class CaseChangeNotificationJob:
                 new_assignments.setdefault(owner_key, []).append(current_state)
                 continue
 
+            suppress_assigned_internal_alerts = (
+                current_state.status.casefold() == "assigned"
+                and str(current_state.case.get("Last Comment By") or "").strip().casefold()
+                == "internal comment"
+            )
+
             if (
                 current_state.status.casefold() == "assigned"
                 and previous_state.status.casefold() != "assigned"
+                and not suppress_assigned_internal_alerts
             ):
                 stats["follow_up_response"] += 1
                 new_assignments.setdefault(owner_key, []).append(current_state)
 
-            if (
-                (
-                    current_state.priority is not None
-                    and previous_state.priority is not None
-                    and current_state.priority != previous_state.priority
-                )
-                or current_state.escalated != previous_state.escalated
+            priority_changed = (
+                current_state.priority is not None
+                and previous_state.priority is not None
+                and current_state.priority != previous_state.priority
+            )
+            escalation_changed = current_state.escalated != previous_state.escalated
+            if escalation_changed or (
+                priority_changed and not suppress_assigned_internal_alerts
             ):
                 stats["priority_changed"] += 1
                 priority_changes.setdefault(owner_key, []).append(current_state)
