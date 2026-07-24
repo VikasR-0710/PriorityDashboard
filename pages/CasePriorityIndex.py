@@ -353,7 +353,7 @@ def fetch_cases(refresh_token=None):
     query = f"""
         SELECT Id, CaseNumber, Subject, Status, Owner.Name, Account.Name, AccountName__c, RecordTypeId, RecordType.Name, RecordType.DeveloperName,
             Support_Level__c, Severity__c, Sevone__c, IsEscalated, CreatedDate, ClosedDate, Heal_Desk__c{due_date_select},
-            (select CommentBody, CreatedBy.Name, CreatedDate, IsPublished from CaseComments where IsPublished=true order by CreatedDate Desc)
+            (select CommentBody, CreatedBy.Name, CreatedDate, IsPublished from CaseComments order by CreatedDate Desc)
         FROM Case
         WHERE Status IN ('New', 'Open', 'Assigned') and Owner.Name IN ({owner_names_str})"""
     return sf.query_all(query)["records"]
@@ -446,6 +446,18 @@ def is_generalized_comment(comment_body):
         "checking the issue", "update shortly", "out of office"]
     return any(phrase in body_lower for phrase in generic_phrases)
 
+def classify_latest_comment(comments, owner_region_map):
+    if not comments:
+        return "Internal Comment"
+
+    latest = comments[0]
+    created_by = (latest.get("CreatedBy") or {}).get("Name", "")
+    if created_by not in owner_region_map:
+        return "Customer Comment"
+    if is_generalized_comment(latest.get("CommentBody", "")):
+        return "Support Comment (Generalized)"
+    return "Support Comment"
+
 def get_processed_data(progress_callback=None, refresh_token=None):
     if progress_callback:
         progress_callback(5, "Initializing connections...")
@@ -487,25 +499,28 @@ def get_processed_data(progress_callback=None, refresh_token=None):
         escalated = case.get("IsEscalated") or False
         sla_hours = get_sla_hours(severity, support_level)      
 
-        last_commenter = "Internal Comment"
         last_customer_comment_dt = None
         comments = (case.get("CaseComments") or {}).get("records", [])
+        published_comments = [
+            comment for comment in comments if comment.get("IsPublished") is True
+        ]
+        # Preserve the existing dashboard classification, which is based only
+        # on published comments. Internal activity is tracked separately for
+        # notification suppression and is not displayed as a changed label.
+        last_commenter = classify_latest_comment(published_comments, owner_region_map)
+        latest_comment_is_internal = bool(
+            comments and comments[0].get("IsPublished") is False
+        )
         
-        if comments:
-            latest = comments[0]
-            created_by = (latest.get("CreatedBy") or {}).get("Name", "")
-            last_commenter = "Support Comment" if created_by in owner_region_map else "Customer Comment"
-            if last_commenter == "Support Comment":
-                if is_generalized_comment(latest.get("CommentBody", "")):
-                    last_commenter = "Support Comment (Generalized)"
-            for comment in comments:
+        if published_comments:
+            for comment in published_comments:
                 if (comment.get("CreatedBy") or {}).get("Name") == 'Customer Support User':
                     last_customer_comment_dt = convert_to_ist_dt(comment.get("CreatedDate"))
                     break
         
         sla_start_dt = None
-        if comments:
-            latest = comments[0]
+        if published_comments:
+            latest = published_comments[0]
             latest_author = (latest.get("CreatedBy") or {}).get("Name", "")
             
             latest_is_support = latest_author in owner_region_map
@@ -547,6 +562,7 @@ def get_processed_data(progress_callback=None, refresh_token=None):
             "Customer Name": customer_name, "Case Owner": owner_name, "Support Level": support_level,
             "Severity": severity, "Status": case.get("Status", "N/A"), "Escalated": escalated,
             "Last Comment By": last_commenter, "Sentiment": sentiment, "Case Score": case_score,
+            "Latest Comment Is Internal": latest_comment_is_internal,
             "Case Score Display": case_score_display,
             "Last Customer Comment": lcc_display, "SLA Response Time": sla_text,
             "SLA_Minutes": sla_mins, "SLA_Breach_Shift": breach_shift,
@@ -584,7 +600,9 @@ def _get_latest_states(sf_conn, case_numbers: list) -> dict:
 def sync_audit_history(df: pd.DataFrame):
     if df.empty: return
     ensure_audit_table_exists()
-    df = df.copy()
+    # This transient flag is used only by the Slack change detector. Excluding
+    # it preserves the existing audit schema and avoids false case updates.
+    df = df.drop(columns=["Latest Comment Is Internal"], errors="ignore").copy()
     df["Escalated"] = df["Escalated"].astype(bool)
     df["SLA_Minutes"] = pd.to_numeric(df["SLA_Minutes"], errors="coerce")
     df["Case Score"] = pd.to_numeric(df["Case Score"], errors="coerce")

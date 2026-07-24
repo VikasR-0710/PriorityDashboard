@@ -96,8 +96,7 @@ class CaseChangeNotificationJob:
 
             suppress_assigned_internal_alerts = (
                 current_state.status.casefold() == "assigned"
-                and str(current_state.case.get("Last Comment By") or "").strip().casefold()
-                == "internal comment"
+                and bool(current_state.case.get("Latest Comment Is Internal"))
             )
 
             if (
