@@ -902,7 +902,8 @@ Required application-managed Snowflake objects:
   refresh.
 
 Slack notifications are enabled in application code and currently scoped to
-NA East. Shift digests run on weekdays at APAC 06:00, EMEA 14:00, NA East
+all NA East analysts plus Sanjay Kademani in NA West. No other NA West analyst
+is included. Shift digests run on weekdays at APAC 06:00, EMEA 14:00, NA East
 18:00, and NA West 21:00 IST. The Slack bot token is loaded from Delinea folder
 `433`, secret `Agentic Support Slack Bot`, field `API Key`; it is never stored
 in this repository.

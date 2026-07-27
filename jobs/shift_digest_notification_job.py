@@ -53,10 +53,20 @@ def _owner_in_scope(
 ) -> bool:
     scope = (settings.recipient_scope or "all").strip()
     normalized_scope = scope.casefold()
-    return (
+    if (
         normalized_scope == "all"
         or owner.strip().casefold() == normalized_scope
         or (region is not None and region.strip().casefold() == normalized_scope)
+    ):
+        return True
+
+    normalized_owner = owner.strip().casefold()
+    normalized_region = (region or "").strip().casefold()
+    return any(
+        configured_region.strip().casefold() == normalized_region
+        and configured_owner.strip().casefold() == normalized_owner
+        for configured_region, configured_owner
+        in settings.additional_region_recipients
     )
 
 

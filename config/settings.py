@@ -47,6 +47,9 @@ class GCSNotificationSettings:
     test_only: bool = False
     dry_run: bool = False
     recipient_scope: str = "NA EAST"
+    additional_region_recipients: tuple[tuple[str, str], ...] = (
+        ("NA WEST", "Sanjay Kademani"),
+    )
     digest_cases_per_message: int = 20
     salesforce_case_url: str = os.getenv("GCS_SALESFORCE_CASE_URL", "")
     dashboard_url: str = os.getenv("GCS_DASHBOARD_URL", "")
