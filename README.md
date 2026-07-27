@@ -1,5 +1,32 @@
 # GCS Prioritization Index
 
+## Newgcs production operation
+
+This version uses FastAPI with a custom browser interface. Run exactly one Uvicorn worker because visible snapshots, caches, and background schedulers are process-local. Startup fails when `WEB_CONCURRENCY` or `UVICORN_WORKERS` is not `1`; an inter-process file lock also prevents a second worker from starting when those variables are absent or incorrect.
+
+Session snapshots expire after 24 hours of inactivity by default. Configure `GCS_SESSION_TTL_SECONDS` and `GCS_SESSION_CLEANUP_SECONDS` when required.
+
+Slack case-change alerts and shift digests are enabled. Keep `test_only` or `dry_run` controls enabled during notification testing rather than disabling the feature in source code.
+
+Run the application with:
+
+```bash
+venv/bin/python main.py
+```
+
+Do not use multiple Uvicorn workers unless session state and scheduler leadership are moved to shared infrastructure such as Redis and a dedicated worker service.
+
+### Browser support validation
+
+The custom chart and resizable table use standards available in current Chrome, Edge, Firefox, and Safari. The chart includes a fallback for browsers without Canvas `roundRect`. Before production promotion, execute the frontend contract test and complete a manual smoke test in the organization-supported versions of all four browsers:
+
+```bash
+venv/bin/python -m unittest discover -s tests -v
+node --check static/app.js
+```
+
+Verify chart rendering, high-DPI clarity, empty-state behavior, sorting, column dragging, minimum column width, horizontal scrolling, and resize behavior at desktop and narrow viewport widths.
+
 Streamlit dashboard for prioritizing open Salesforce support cases. The app pulls active cases from Salesforce, calculates priority and SLA information, reads AI sentiment from Snowflake, writes audit snapshots and SLA breach impact snapshots to Snowflake, and runs background pipelines that update Snowflake on a schedule.
 
 ## What This App Does
@@ -64,19 +91,19 @@ python main.py
 Run it with Streamlit:
 
 ```bash
-python3 -m streamlit run main.py --server.fileWatcherType none
+python3 main.py
 ```
 
 If you want to use the virtualenv Python directly:
 
 ```bash
-venv/bin/python -m streamlit run main.py --server.fileWatcherType none
+venv/bin/python main.py
 ```
 
 If port `8501` is already in use:
 
 ```bash
-python3 -m streamlit run main.py --server.fileWatcherType none --server.port 8505
+PORT=8505 python3 main.py
 ```
 
 Then open:
@@ -106,7 +133,7 @@ python3 -m pip install -r requirements.txt
 Run the app:
 
 ```bash
-python3 -m streamlit run main.py --server.fileWatcherType none
+python3 main.py
 ```
 
 The `--server.fileWatcherType none` flag avoids macOS watchdog/FSEvents startup failures such as:
@@ -762,13 +789,13 @@ python3 -m pip install -r requirements.txt
 Run app:
 
 ```bash
-python3 -m streamlit run main.py --server.fileWatcherType none
+python3 main.py
 ```
 
 Run app on a specific port:
 
 ```bash
-python3 -m streamlit run main.py --server.fileWatcherType none --server.port 8505
+PORT=8505 python3 main.py
 ```
 
 Check installed packages:
@@ -784,13 +811,13 @@ python3 -m pip check
 Use `python3`:
 
 ```bash
-python3 -m streamlit run main.py --server.fileWatcherType none
+python3 main.py
 ```
 
 or call the venv binary:
 
 ```bash
-venv/bin/python -m streamlit run main.py --server.fileWatcherType none
+venv/bin/python main.py
 ```
 
 ### `missing ScriptRunContext`
@@ -806,7 +833,7 @@ python3 main.py
 Correct:
 
 ```bash
-python3 -m streamlit run main.py --server.fileWatcherType none
+python3 main.py
 ```
 
 ### `Cannot start fsevents stream`
@@ -814,7 +841,7 @@ python3 -m streamlit run main.py --server.fileWatcherType none
 Run with file watching disabled:
 
 ```bash
-python3 -m streamlit run main.py --server.fileWatcherType none
+python3 main.py
 ```
 
 ### `ModuleNotFoundError`

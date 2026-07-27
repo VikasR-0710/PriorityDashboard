@@ -1,437 +1,335 @@
-import sys
+"""GCS Prioritization Index web application (FastAPI, no Streamlit)."""
+
+from __future__ import annotations
+
+import asyncio
+import fcntl
+import math
 import os
 import threading
 import time
-import importlib.util
 import uuid
-import streamlit as st
-import pytz
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional
 
-sys.path.append(os.getcwd())
+import pandas as pd
+import pytz
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from config.logging_setup import setup_snowflake_logging
-
-LOG_TABLE = setup_snowflake_logging()
-print(f"Snowflake application logging enabled at: {LOG_TABLE}")
-
-# -------------------------------------------------------
-# 📦 PAGE CONFIG
-# -------------------------------------------------------
-st.set_page_config(
-    page_title="Prioritization Dashboard",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+from config.settings import gcs_notification_settings
+from jobs.case_change_notification_job import CaseChangeNotificationJob
+from pages.CasePriorityIndex import (
+    ALL_PRIORITY_OPTION, ALL_REGIONS_OPTION, ALL_SUPPORT_LEVELS_OPTION,
+    apply_filters_and_ranking, fetch_owner_config, get_processed_data,
+    sync_audit_history,
 )
+from pages.OngoingSLABreaches import get_filtered_breach_data, sync_sla_breach_impact_history
+from pages.Sentiment_analysis import main as run_sentiment_analysis
+from pages.WeightageMeter import get_weightage_summary
+from services.background_case_refresh_service import BackgroundCaseRefreshService
+from services.case_priority_snapshot_service import CasePrioritySnapshotService
+from services.notification_service import ShiftNotificationScheduler
 
-# -------------------------------------------------------
-# 🕒 BACKGROUND SCHEDULER (Runs Once Per Session)
-# -------------------------------------------------------
+setup_snowflake_logging()
+BASE_DIR = Path(__file__).resolve().parent
+BACKGROUND_REFRESH_SECONDS = 60
+BACKGROUND_REFRESH_LABEL = "1 minute(s)"
+SESSION_TTL_SECONDS = int(os.getenv("GCS_SESSION_TTL_SECONDS", "86400"))
+SESSION_CLEANUP_SECONDS = int(os.getenv("GCS_SESSION_CLEANUP_SECONDS", "900"))
 INITIAL_DELAY_MINUTES = 0.5
 INTERVAL_MINUTES = 60
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SENTIMENT_SCRIPT_PATH = os.path.join(SCRIPT_DIR, "pages", "Sentiment_analysis.py")
+SLA_IMPACT_RUN_HOUR_IST = 18
 
-def _run_sentiment_pipeline_loop():
+state_lock = threading.RLock()
+session_states = {}
+runtime_lock_handle = None
+
+
+def new_session_state():
+    return {
+        "snapshot": None,
+        "last_accessed": time.time(),
+        "warnings": [],
+        "progress": {"ready": False, "loading": False, "percent": 0,
+                     "text": "Preparing to load...", "error": None},
+    }
+
+
+def get_session_state(client_id):
+    with state_lock:
+        session = session_states.setdefault(client_id, new_session_state())
+        session["last_accessed"] = time.time()
+        return session
+
+
+def cleanup_expired_sessions(now=None):
+    cutoff = (now or time.time()) - SESSION_TTL_SECONDS
+    with state_lock:
+        expired = [key for key, value in session_states.items() if value["last_accessed"] < cutoff]
+        for key in expired:
+            session_states.pop(key, None)
+    return len(expired)
+
+
+def session_cleanup_loop():
+    while True:
+        time.sleep(SESSION_CLEANUP_SECONDS)
+        removed = cleanup_expired_sessions()
+        if removed:
+            print(f"GCS session cleanup: removed {removed} expired session(s).")
+
+
+def serializable(value):
+    if value is None or (isinstance(value, float) and (math.isnan(value) or math.isinf(value))):
+        return None
+    if hasattr(value, "item"):
+        value = value.item()
+    if isinstance(value, (datetime, pd.Timestamp)):
+        return value.isoformat()
+    return value
+
+
+def dataframe_records(df):
+    return [{key: serializable(value) for key, value in row.items()} for row in df.to_dict(orient="records")]
+
+
+def update_startup_progress(client_id, percent, text):
+    with state_lock:
+        get_session_state(client_id)["progress"].update(
+            percent=int(percent), text=text, loading=True, error=None
+        )
+
+
+def load_visible_snapshot(client_id, claimed=False):
+    session = get_session_state(client_id)
+    with state_lock:
+        if session["progress"]["loading"] and not claimed:
+            return None
+        session["progress"].update(
+            ready=False, loading=True, percent=0,
+            text="Preparing to load...", error=None,
+        )
+        session["warnings"] = []
     try:
-        print(f"⏳ Sentiment scheduler: Waiting {INITIAL_DELAY_MINUTES} minutes before first run...")
-        time.sleep(INITIAL_DELAY_MINUTES * 60)
-        while True:
-            try:
-                print("🚀 Executing Sentiment Analysis & Snowflake Ingestion...")
-                if not os.path.exists(SENTIMENT_SCRIPT_PATH):
-                    raise FileNotFoundError(f"Script not found at: {SENTIMENT_SCRIPT_PATH}")
-                spec = importlib.util.spec_from_file_location("sentiment_analysis", SENTIMENT_SCRIPT_PATH)
-                sentiment_module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(sentiment_module)
-                if hasattr(sentiment_module, "main"):
-                    sentiment_module.main()
-                    print("✅ Pipeline run completed successfully.")
-                else:
-                    raise AttributeError("Sentiment_analysis.py must define a main() function")
-            except Exception as e:
-                print(f"❌ Pipeline execution failed: {e}")
-                import traceback
-                traceback.print_exc()
-            print(f" Sentiment scheduler: Waiting {INTERVAL_MINUTES} minutes until next run...")
-            time.sleep(INTERVAL_MINUTES * 60)
-    except Exception as e:
-        print(f"🔥 Background scheduler crashed: {e}")
-        import traceback
-        traceback.print_exc()
+        dataframe, cases = get_processed_data(
+            progress_callback=lambda percent, text: update_startup_progress(client_id, percent, text),
+            refresh_token=f"ui-{uuid.uuid4()}",
+        )
+        update_startup_progress(client_id, 92, "Syncing audit history...")
+        try:
+            sync_audit_history(dataframe)
+        except Exception as exc:
+            session["warnings"].append(f"Audit history synchronization failed: {exc}")
+        update_startup_progress(client_id, 95, "Syncing SLA breach impact...")
+        try:
+            sync_sla_breach_impact_history(dataframe)
+        except Exception as exc:
+            session["warnings"].append(f"SLA breach impact synchronization failed: {exc}")
+        update_startup_progress(client_id, 100, "Rendering dashboard...")
+        snapshot = {"dataframe": dataframe, "cases": cases, "loaded_at": time.time()}
+        with state_lock:
+            session["snapshot"] = snapshot
+            session["progress"].update(
+                ready=True, loading=False, percent=100, text="Rendering dashboard..."
+            )
+        return snapshot
+    except Exception as exc:
+        with state_lock:
+            session["progress"].update(ready=False, loading=False, error=str(exc))
+        raise
 
-def schedule_pipeline():
-    if st.session_state.get("pipeline_scheduled", False):
-        return
-    st.session_state.pipeline_scheduled = True
-    st.session_state.pipeline_launch_time = time.time()
-    thread = threading.Thread(target=_run_sentiment_pipeline_loop, daemon=True)
-    thread.start()
-
-schedule_pipeline()
-
-# -------------------------------------------------------
-# 📦 IMPORTS
-# -------------------------------------------------------
-try:
-    from pages.CasePriorityIndex import (
-        inject_custom_css, 
-        get_processed_data, 
-        apply_filters_and_ranking, 
-        render_table,
-        sync_audit_history,
-        fetch_owner_config,
-    )
-    from pages.WeightageMeter import render_chart
-    from pages.OngoingSLABreaches import render_30_day_chart, sync_sla_breach_impact_history
-    from jobs.case_change_notification_job import CaseChangeNotificationJob
-    from config.settings import gcs_notification_settings
-    from services.background_case_refresh_service import BackgroundCaseRefreshService
-    from services.case_priority_snapshot_service import CasePrioritySnapshotService
-    from services.notification_service import ShiftNotificationScheduler
-except ImportError as e:
-    st.error(f"❌ Import Error: {e}. Please check your file structure.")
-    st.stop()
-
-# -------------------------------------------------------
-# BACKGROUND CASE REFRESH (INDEPENDENT OF THE UI)
-# -------------------------------------------------------
-BACKGROUND_REFRESH_SECONDS = 60
-BACKGROUND_REFRESH_LABEL = (
-    f"{BACKGROUND_REFRESH_SECONDS // 60} minute(s)"
-    if BACKGROUND_REFRESH_SECONDS % 60 == 0
-    else f"{BACKGROUND_REFRESH_SECONDS} seconds"
-)
-
-@st.cache_resource
-def get_case_change_notification_job():
-    return CaseChangeNotificationJob()
-
-@st.cache_resource
-def get_case_priority_snapshot_service():
-    return CasePrioritySnapshotService()
 
 def notify_case_changes(previous_snapshot, current_snapshot):
     try:
-        snapshot_stats = get_case_priority_snapshot_service().sync(
+        CasePrioritySnapshotService().sync(
             current_snapshot.dataframe,
             datetime.fromtimestamp(current_snapshot.refreshed_at, tz=pytz.utc),
         )
-        print(f"GCS case priority snapshot sync: {snapshot_stats}")
     except Exception as exc:
         print(f"⚠️ GCS case priority snapshot sync failed: {exc}")
-
-    if not gcs_notification_settings.enabled or gcs_notification_settings.test_only:
-        return
-    stats = get_case_change_notification_job().run(
-        previous_snapshot.dataframe if previous_snapshot else None,
-        current_snapshot.dataframe,
-    )
-    if any(stats.values()):
-        print(f"GCS case change notifications: {stats}")
-
-@st.cache_resource
-def get_background_case_refresh_service():
-    return BackgroundCaseRefreshService(
-        loader=get_processed_data,
-        interval_seconds=BACKGROUND_REFRESH_SECONDS,
-        on_refresh=notify_case_changes,
-    )
-
-background_case_refresh = get_background_case_refresh_service()
-background_case_refresh.start(run_immediately=False)
-
-@st.cache_resource
-def get_shift_notification_scheduler():
-    return ShiftNotificationScheduler(snapshot_loader=get_processed_data)
-
-shift_notification_scheduler = get_shift_notification_scheduler()
-shift_notification_scheduler.start()
-
-# -------------------------------------------------------
-# 📉 SLA BREACH IMPACT SCHEDULER
-# -------------------------------------------------------
-SLA_IMPACT_RUN_HOUR_IST = 18
-
-def _seconds_until_next_sla_impact_run():
-    ist = pytz.timezone("Asia/Kolkata")
-    now_ist = datetime.now(ist)
-    target = now_ist.replace(hour=SLA_IMPACT_RUN_HOUR_IST, minute=0, second=0, microsecond=0)
-    if now_ist >= target:
-        target += timedelta(days=1)
-    return max(60, int((target - now_ist).total_seconds()))
-
-def _run_sla_breach_impact_loop():
-    while True:
-        sleep_seconds = _seconds_until_next_sla_impact_run()
-        print(f"⏳ SLA breach impact scheduler: waiting {sleep_seconds // 60} minutes until 6 PM IST run.")
-        time.sleep(sleep_seconds)
+    if gcs_notification_settings.enabled and not gcs_notification_settings.test_only:
         try:
-            print("🚀 Executing daily SLA breach impact sync...")
-            current_df, _ = get_processed_data()
-            sync_sla_breach_impact_history(current_df)
-            print("✅ Daily SLA breach impact sync completed.")
-        except Exception as e:
-            print(f"❌ Daily SLA breach impact sync failed: {e}")
-            import traceback
-            traceback.print_exc()
+            CaseChangeNotificationJob().run(
+                previous_snapshot.dataframe if previous_snapshot else None,
+                current_snapshot.dataframe,
+            )
+        except Exception as exc:
+            print(f"⚠️ GCS case change notifications failed: {exc}")
 
-def schedule_sla_breach_impact_pipeline():
-    if st.session_state.get("sla_breach_impact_scheduler_scheduled", False):
-        return
-    st.session_state.sla_breach_impact_scheduler_scheduled = True
-    thread = threading.Thread(target=_run_sla_breach_impact_loop, daemon=True)
-    thread.start()
 
-schedule_sla_breach_impact_pipeline()
-
-# -------------------------------------------------------
-# 🎨 UI THEME & CSS
-# -------------------------------------------------------
-# Set default accent color if not present
-if 'accent_color' not in st.session_state:
-    st.session_state.accent_color = "#3B82F6"
-
-inject_custom_css()
-
-st.markdown(
-    f"""
-    <style>
-    .stApp {{ background-color: #0F172A !important; color: #F8FAFC !important; }}
-    hr {{ border: 0; height: 1px; background: linear-gradient(to right, {st.session_state.accent_color}, transparent); margin: 1.5rem 0; }}
-    .main-dashboard-row [data-testid="stColumn"] {{ background-color: #1E293B !important; padding: 1.5rem !important; border-radius: 12px !important; border: 1px solid #334155 !important; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }}
-    .main-dashboard-row [data-testid="stColumn"] [data-testid="stColumn"] {{ background-color: transparent !important; padding: 0px !important; margin: 0px !important; border: none !important; box-shadow: none !important; }}
-    .main-dashboard-row [data-testid="stColumn"]:first-child p, .main-dashboard-row [data-testid="stColumn"]:first-child div[data-testid="stHorizontalBlock"] p {{ font-size: 14px !important; line-height: 1.4 !important; }}
-    .main-dashboard-row [data-testid="stColumn"]:first-child h1, .main-dashboard-row [data-testid="stColumn"]:first-child h2, .main-dashboard-row [data-testid="stColumn"]:first-child h3, .main-dashboard-row [data-testid="stColumn"]:first-child h4 {{ font-size: 1.2rem !important; color: #FFFFFF !important; }}
-    label, label p, label span {{ color: #94A3B8 !important; font-weight: 500 !important; font-size: 0.9rem !important; letter-spacing: 0.5px; }}
-    div[data-testid="stButton"] button {{ background-color: #1E293B !important; border: 1px solid #334155 !important; border-radius: 6px !important; transition: all 0.2s ease-in-out; }}
-    div[data-testid="stButton"] button p {{ color: #E2E8F0 !important; font-weight: 500 !important; }}
-    div[data-testid="stButton"] button:hover {{ border-color: {st.session_state.accent_color} !important; box-shadow: 0 0 10px {st.session_state.accent_color}40; }}
-    .dashboard-title {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important; color: #FFFFFF !important; font-size: 2rem !important; font-weight: 700 !important; letter-spacing: -0.5px !important; margin-bottom: 4px !important; }}
-    .dashboard-subtitle {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; color: #94A3B8 !important; font-size: 0.95rem !important; margin-bottom: 20px !important; }}
-    .accent-bar {{ height: 4px; width: 60px; background-color: {st.session_state.accent_color}; border-radius: 2px; margin-bottom: 25px; }}
-    
-    /* 🎯 Sleek Search Input Styling */
-    div[data-testid="stTextInput"] > div > div > input {{
-        background-color: #1E293B !important;
-        border: 1px solid #334155 !important;
-        border-radius: 6px !important;
-        color: #F8FAFC !important;
-        font-size: 13px !important;
-        padding: 8px 12px !important;
-        height: 42px !important;
-    }}
-    div[data-testid="stTextInput"] > div > div > input:focus {{
-        border-color: {st.session_state.accent_color} !important;
-        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
-    }}
-    div[data-testid="stTextInput"] > div > div > input::placeholder {{
-        color: #64748B !important;
-    }}
-    </style>
-    """,
-    unsafe_allow_html=True
+background_refresh = BackgroundCaseRefreshService(
+    loader=get_processed_data,
+    interval_seconds=BACKGROUND_REFRESH_SECONDS,
+    on_refresh=notify_case_changes,
 )
 
-# -------------------------------------------------------
-# 🔄 HEADER & REFRESH LOGIC
-# -------------------------------------------------------
-def refresh_dashboard():
-    # Stop the current cycle and begin a new configured refresh window. The foreground
-    # reload below is isolated by its own token, so it cannot race with the worker.
-    background_case_refresh.restart(run_immediately=False)
-    fetch_owner_config.clear()
-    keys_to_clear = ['ui_case_snapshot', 'audit_synced', 'sla_breach_impact_synced', 'dashboard_loaded']
-    for key in keys_to_clear:
-        if key in st.session_state: del st.session_state[key]
-    st.rerun()
 
-def clear_search_only():
-    """Clear only the search field."""
-    if "search_case_input" in st.session_state:
-        st.session_state.search_case_input = ""
+def sentiment_loop():
+    time.sleep(INITIAL_DELAY_MINUTES * 60)
+    while True:
+        try:
+            run_sentiment_analysis()
+        except Exception as exc:
+            print(f"❌ Pipeline execution failed: {exc}")
+        time.sleep(INTERVAL_MINUTES * 60)
 
-# 🎯 SINGLE ROW HEADER: Title/Status on Left, Actions on Right
-header_col1, header_col2 = st.columns([0.85, 0.15])
 
-with header_col1:
-    # Title and Accent Bar
-    st.markdown('<div class="dashboard-title">GCS Prioritization Index</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="accent-bar"></div>', unsafe_allow_html=True)
-    
-    # Pipeline Status Indicator
-    launch_time = st.session_state.get("pipeline_launch_time")
-    if launch_time:
-        current_time = time.time()
-        elapsed = current_time - launch_time
-        if elapsed < (INITIAL_DELAY_MINUTES * 60):
-            next_run_seconds = (INITIAL_DELAY_MINUTES * 60) - elapsed
-            status_text = "⏳ Initial Wait"
-        else:
-            cycle_elapsed = elapsed % (INTERVAL_MINUTES * 60)
-            next_run_seconds = (INTERVAL_MINUTES * 60) - cycle_elapsed
-            status_text = " Next Cycle"
-        mins, secs = divmod(int(next_run_seconds), 60)
-       ## st.markdown(
-      ##      f"""<div style="display: inline-block; background-color: #1E293B; border: 1px solid #334155; border-radius: 6px; padding: 4px 12px; margin-top: 8px; font-size: 0.85rem; color: #94A3B8;">
-        ##        <span style="color: {st.session_state.accent_color}; font-weight: bold;">{status_text}:</span> 
-          ##      Sentiment Pipeline runs in <b>{mins}m {secs}s</b>
-            ##</div>""", unsafe_allow_html=True)
+def sla_impact_loop():
+    ist = pytz.timezone("Asia/Kolkata")
+    while True:
+        now = datetime.now(ist)
+        target = now.replace(hour=SLA_IMPACT_RUN_HOUR_IST, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        time.sleep(max(60, int((target - now).total_seconds())))
+        try:
+            dataframe, _ = get_processed_data()
+            sync_sla_breach_impact_history(dataframe)
+        except Exception as exc:
+            print(f"❌ Daily SLA breach impact sync failed: {exc}")
 
-with header_col2:
-    # Vertical spacer to push buttons down to align with the status indicator
-    st.markdown("<br>", unsafe_allow_html=True) 
-    
-    # Clear Search Button (Conditional)
-    if st.session_state.get("search_case_input"):
-        st.button("🔍 Clear Search", use_container_width=True, type="secondary", on_click=clear_search_only)
-        
-    # Refresh Button
-    if st.button("🔄 Refresh", use_container_width=True, type="secondary"):
-        refresh_dashboard()
 
-@st.fragment(run_every=30)
-def render_background_update_status():
-    """Poll worker metadata without rerunning or replacing dashboard data."""
-    snapshot = background_case_refresh.get_snapshot()
-    ui_snapshot = st.session_state.get("ui_case_snapshot")
-    if ui_snapshot is None:
-        return
-    ui_loaded_at = (
-        ui_snapshot.get("loaded_at", 0)
-        if isinstance(ui_snapshot, dict)
-        else 0
+@asynccontextmanager
+async def lifespan(_app):
+    global runtime_lock_handle
+    configured_workers = int(os.getenv("WEB_CONCURRENCY", os.getenv("UVICORN_WORKERS", "1")))
+    if configured_workers != 1:
+        raise RuntimeError("Newgcs requires exactly one Uvicorn worker because snapshots and schedulers are process-local.")
+    lock_path = os.getenv("GCS_RUNTIME_LOCK_PATH", "/tmp/newgcs-runtime.lock")
+    runtime_lock_handle = open(lock_path, "a+")
+    try:
+        fcntl.flock(runtime_lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        runtime_lock_handle.close()
+        runtime_lock_handle = None
+        raise RuntimeError("Another Newgcs worker is already active; configure exactly one Uvicorn worker.") from exc
+    background_refresh.start(run_immediately=False)
+    threading.Thread(target=sentiment_loop, daemon=True, name="sentiment-pipeline").start()
+    threading.Thread(target=sla_impact_loop, daemon=True, name="sla-impact-pipeline").start()
+    threading.Thread(target=session_cleanup_loop, daemon=True, name="session-cleanup").start()
+    def start_notification_scheduler():
+        try:
+            scheduler = ShiftNotificationScheduler(snapshot_loader=get_processed_data)
+            scheduler.start()
+        except Exception as exc:
+            print(f"Notification scheduler failed to start: {exc}")
+    threading.Thread(target=start_notification_scheduler, daemon=True, name="notification-scheduler-start").start()
+    try:
+        yield
+    finally:
+        fcntl.flock(runtime_lock_handle.fileno(), fcntl.LOCK_UN)
+        runtime_lock_handle.close()
+        runtime_lock_handle = None
+
+
+app = FastAPI(title="Prioritization Dashboard", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+
+
+@app.middleware("http")
+async def disable_browser_cache_during_testing(request, call_next):
+    """Always serve the latest UI assets while the dashboard is under test."""
+    client_id = request.cookies.get("gcs_client_id") or uuid.uuid4().hex
+    request.state.gcs_client_id = client_id
+    response = await call_next(request)
+    if not request.cookies.get("gcs_client_id"):
+        response.set_cookie(
+            "gcs_client_id", client_id, httponly=True,
+            samesite="lax", max_age=30 * 24 * 60 * 60,
+        )
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
+@app.get("/")
+def index():
+    return FileResponse(BASE_DIR / "static" / "index.html")
+
+
+@app.get("/api/startup-status")
+def startup_status(request: Request):
+    client_id = request.state.gcs_client_id
+    session = get_session_state(client_id)
+    with state_lock:
+        progress = dict(session["progress"])
+        if not progress["ready"] and not progress["loading"] and not progress["error"]:
+            session["progress"]["loading"] = True
+            progress["loading"] = True
+            threading.Thread(
+                target=load_visible_snapshot, args=(client_id, True), daemon=True,
+                name=f"visible-dashboard-load-{client_id[:8]}",
+            ).start()
+        return progress
+
+
+@app.get("/api/dashboard")
+def dashboard(
+    request: Request,
+    region: list[str] = Query(default=[]), owner: list[str] = Query(default=[]),
+    support: list[str] = Query(default=[]), priority: list[str] = Query(default=[]),
+    search: str = "", heal_desk_only: bool = False, sort: Optional[str] = None,
+    ascending: bool = True,
+):
+    client_id = request.state.gcs_client_id
+    with state_lock:
+        snapshot = get_session_state(client_id)["snapshot"]
+    if snapshot is None:
+        return {"ready": False}
+    df = snapshot["dataframe"].copy()
+    filtered, active_owners, search_query, heal_filter = apply_filters_and_ranking(
+        df, region or [ALL_REGIONS_OPTION], owner,
+        support or [ALL_SUPPORT_LEVELS_OPTION], priority or [ALL_PRIORITY_OPTION],
+        search, heal_desk_only,
     )
-    if snapshot and snapshot.refreshed_at > ui_loaded_at:
-        refreshed_ist = datetime.fromtimestamp(
-            snapshot.refreshed_at,
-            tz=pytz.timezone("Asia/Kolkata"),
-        ).strftime("%d-%b-%Y %I:%M:%S %p IST")
-        st.info(
-            f"🟢 New data available from {refreshed_ist}. "
-            "Click Refresh to update the dashboard."
-        )
+    if sort and sort in filtered.columns:
+        target = "SLA_Minutes" if sort == "SLA Response Time" else sort
+        filtered = filtered.sort_values(target, ascending=ascending, na_position="last")
+    owner_map = fetch_owner_config()
+    regions = sorted(set(owner_map.values()) - {"Agent"})
+    active_regions = regions if not region or ALL_REGIONS_OPTION in region else region
+    available_owners = sorted(name for name, value in owner_map.items() if value in active_regions)
+    support_levels = sorted(str(v).strip() for v in df.get("Support Level", pd.Series(dtype=str)).dropna().unique() if str(v).strip())
+    breaches = get_filtered_breach_data(active_owners, search_query, heal_filter)
+    background = background_refresh.get_snapshot()
+    return {
+        "rows": dataframe_records(filtered),
+        "filters": {
+            "regions": [ALL_REGIONS_OPTION] + regions,
+            "owners": available_owners,
+            "support_levels": [ALL_SUPPORT_LEVELS_OPTION] + support_levels,
+            "priorities": [ALL_PRIORITY_OPTION, "Need Immediate Attention", "Need Secondary Attention"],
+        },
+        "weightage": get_weightage_summary(filtered),
+        "breaches": breaches,
+        "loaded_at": snapshot["loaded_at"],
+        "new_data_available": bool(background and background.refreshed_at > snapshot["loaded_at"]),
+        "background_refreshed_at": background.refreshed_at if background else None,
+        "warnings": list(get_session_state(client_id)["warnings"]),
+        "footer": f"Backend data refreshes every {BACKGROUND_REFRESH_LABEL}. The visible index changes only when Refresh is clicked. Audit history retains 2-day change snapshots.",
+    }
 
-render_background_update_status()
 
-st.divider()
+@app.post("/api/refresh")
+async def refresh(request: Request):
+    client_id = request.state.gcs_client_id
+    background_refresh.restart(run_immediately=False)
+    fetch_owner_config.clear()
+    with state_lock:
+        get_session_state(client_id)["progress"]["loading"] = False
+    snapshot = await asyncio.to_thread(load_visible_snapshot, client_id)
+    if snapshot is None:
+        return {"ok": False}
+    return {"ok": True, "loaded_at": snapshot["loaded_at"]}
 
-# -------------------------------------------------------
-#  DATA FETCHING, AUDIT SYNC & RENDERING
-# -------------------------------------------------------
 
-# 🔄 FULL-SCREEN LOADING OVERLAY WITH REAL-TIME PERCENTAGE
-is_initial_load = "dashboard_loaded" not in st.session_state
-loading_overlay = None
-
-def update_overlay(percent, text):
-    """Updates the full-screen overlay with current progress percentage and status text."""
-    if loading_overlay:
-        with loading_overlay:
-            st.markdown(f"""
-                <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; 
-                            background-color: rgba(15, 23, 42, 0.98); z-index: 99999; 
-                            display: flex; justify-content: center; align-items: center; 
-                            flex-direction: column; color: #F8FAFC; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-                    <div style="border: 5px solid #334155; border-top: 5px solid {st.session_state.accent_color}; 
-                                border-radius: 50%; width: 60px; height: 60px; 
-                                animation: spin 1s linear infinite; margin-bottom: 20px;"></div>
-                    <div style="font-size: 22px; font-weight: 700; letter-spacing: -0.5px;">Calculating Index for your Priority ............</div>
-                    <div style="font-size: 14px; color: #94A3B8; margin-top: 8px;">{text}</div>
-                    <div style="width: 300px; height: 8px; background-color: #334155; border-radius: 4px; overflow: hidden; margin-top: 20px;">
-                        <div style="width: {percent}%; height: 100%; background-color: {st.session_state.accent_color}; border-radius: 4px; transition: width 0.5s ease-out;"></div>
-                    </div>
-                    <div style="margin-top: 10px; font-size: 16px; font-weight: 600; color: #94A3B8;">{percent}%</div>
-                </div>
-                <style>
-                    @keyframes spin {{
-                        0% {{ transform: rotate(0deg); }}
-                        100% {{ transform: rotate(360deg); }}
-                    }}
-                </style>
-            """, unsafe_allow_html=True)
-
-if is_initial_load:
-    loading_overlay = st.empty()
-    update_overlay(0, "Preparing to load...")
-
-try:
-    # Keep one immutable data snapshot per browser session. Streamlit widget
-    # reruns (filters, sorting, row expansion) continue to render this snapshot
-    # until the user explicitly presses Refresh.
-    if "ui_case_snapshot" not in st.session_state:
-        ui_refresh_token = f"ui-{uuid.uuid4()}"
-        ui_dataframe, ui_cases = get_processed_data(
-            progress_callback=update_overlay,
-            refresh_token=ui_refresh_token,
-        )
-        st.session_state.ui_case_snapshot = {
-            "dataframe": ui_dataframe,
-            "cases": ui_cases,
-            "loaded_at": time.time(),
-        }
-    ui_snapshot = st.session_state.ui_case_snapshot
-    # Compatibility for browser sessions created before snapshot metadata was
-    # introduced; their visible data remains intact until manual Refresh.
-    if isinstance(ui_snapshot, dict):
-        df, cases = ui_snapshot["dataframe"], ui_snapshot["cases"]
-    else:
-        df, cases = ui_snapshot
-    
-    update_overlay(92, "Syncing audit history...")
-    if not st.session_state.get("audit_synced"):
-        try:
-            sync_audit_history(df)
-            st.session_state.audit_synced = True
-        except Exception as e:
-            st.warning(f"⚠️ Audit sync failed (dashboard still functional): {e}")
-
-    update_overlay(95, "Syncing SLA breach impact...")
-    if not st.session_state.get("sla_breach_impact_synced"):
-        try:
-            sync_sla_breach_impact_history(df)
-            st.session_state.sla_breach_impact_synced = True
-        except Exception as e:
-            st.warning(f"⚠️ SLA breach impact sync failed (dashboard still functional): {e}")
-    
-    update_overlay(100, "Rendering dashboard...")
-    
-    if loading_overlay:
-        loading_overlay.empty()
-        st.session_state.dashboard_loaded = True
-
-    if df.empty:
-        st.warning("⚠️ No open cases found for the selected owners.")
-    else:
-        # UPDATED: Unpack the 4th value (is_heal_desk_filter)
-        filtered_df, active_owners, search_query, is_heal_desk_filter = apply_filters_and_ranking(df)
-        
-        if filtered_df.empty:
-            st.info("ℹ️ No cases match the current filters.")
-        else:
-            st.markdown('<div class="main-dashboard-row">', unsafe_allow_html=True)
-            render_table(filtered_df, cases)
-            st.markdown('</div>', unsafe_allow_html=True)
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            st.markdown('<div class="main-dashboard-row">', unsafe_allow_html=True)
-            chart_col1, chart_col2 = st.columns(2, gap="large")
-            with chart_col1:
-                try: render_chart(filtered_df)
-                except Exception as e: st.error(f"Chart 1 Error: {e}")
-            with chart_col2:
-                # UPDATED: Pass is_heal_desk_filter to the chart
-                try: render_30_day_chart(active_owners, search_query, is_heal_desk_filter)
-                except Exception as e: st.error(f"Chart 2 Error: {e}")
-            st.markdown('</div>', unsafe_allow_html=True)
-
-except Exception as e:
-    if loading_overlay:
-        loading_overlay.empty()
-    st.error(f"❌ Critical Error Loading Dashboard: {e}")
-    st.exception(e)
-    st.stop()
-
-st.divider()
-st.caption(f"🔄 Backend data refreshes every {BACKGROUND_REFRESH_LABEL}. The visible index changes only when Refresh is clicked. Audit history retains 2-day change snapshots.")
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host=os.getenv("HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8505")), reload=False)

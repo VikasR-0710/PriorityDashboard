@@ -1,0 +1,171 @@
+:root {
+  --bg: #03060d;
+  --panel: #080e1e;
+  --line: #182137;
+  --text: #f4f5f7;
+  --muted: #596987;
+  --cyan: #ff8833;
+  --blue: #ff9e3d;
+  --red: #ff4968;
+  --amber: #ffb020;
+}
+
+.filters { align-items: end; }
+.filter-field { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.filter-field > span {
+  padding-left: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+}
+.multi-filter { position: relative; height: 43px; color: #c6cad5; border: 1px solid #252b38; border-radius: 9px; background: #0d1017; font: 500 12px DM Sans; }
+.multi-filter summary { display: flex; height: 100%; padding: 0 12px; align-items: center; justify-content: space-between; cursor: pointer; list-style: none; }
+.multi-filter summary::-webkit-details-marker { display: none; }
+.multi-filter summary::after { content: '⌄'; color: #8791a5; font-size: 15px; }
+.multi-filter[open] { border-color: #cc672b; box-shadow: 0 0 0 3px rgba(255,127,46,.1); z-index: 10; }
+.multi-options { position: absolute; top: calc(100% + 5px); left: 0; width: max(100%,220px); max-height: 260px; padding: 6px; overflow: auto; border: 1px solid #343b49; border-radius: 9px; background: #11151d; box-shadow: 0 16px 35px rgba(0,0,0,.55); }
+.multi-options label { display: flex; padding: 8px; align-items: center; gap: 8px; border-radius: 6px; cursor: pointer; }
+.multi-options label:hover { background: rgba(255,136,51,.1); }
+.multi-options input { accent-color: #ff8833; }
+.multi-filter.applied { border-color: #f3b51b; box-shadow: inset 0 0 0 1px rgba(243,181,27,.2),0 0 0 2px rgba(243,181,27,.06); }
+
+body {
+  background:
+    radial-gradient(circle at 78% 4%, rgba(255, 111, 37, 0.055), transparent 31%),
+    linear-gradient(180deg, #070911 0, #03060d 44%, #02050b 100%);
+}
+
+main { width: min(1650px, calc(100% - 36px)); }
+
+.aurora.one { background: #ff7028; opacity: 0.07; }
+.aurora.two { background: #16274a; opacity: 0.08; }
+.eyebrow { color: #5f6e8d; }
+.eyebrow i { background: #ff8833; box-shadow: 0 0 12px rgba(255, 136, 51, 0.7); }
+.accent { background: linear-gradient(90deg, #ff762d, #ffad45); }
+
+button {
+  color: #fff;
+  background: linear-gradient(135deg, #ff792e, #ff963a);
+  border-color: #f18437;
+  box-shadow: 0 8px 25px rgba(255, 111, 37, 0.16);
+}
+button:hover {
+  border-color: #ffb15a;
+  box-shadow: 0 10px 30px rgba(255, 111, 37, 0.28);
+}
+button.ghost { background: #0b101e; border-color: #242d42; box-shadow: none; }
+
+.notice {
+  color: #ffb46b;
+  border-color: #713b20;
+  background: #24150f;
+}
+
+.filters select,
+.search {
+  color: #c6cad5;
+  border-color: #252b38;
+  background: #0d1017;
+}
+.filters select:focus,
+.search:focus-within {
+  border-color: #cc672b;
+  box-shadow: 0 0 0 3px rgba(255, 127, 46, 0.1);
+}
+.filters select.applied,
+.search.applied {
+  border-color: #f3b51b;
+  box-shadow: inset 0 0 0 1px rgba(243, 181, 27, 0.2), 0 0 0 2px rgba(243, 181, 27, 0.06);
+}
+.toggle.applied {
+  color: #f3c34e;
+}
+.toggle.applied span {
+  box-shadow: 0 0 0 2px rgba(243, 181, 27, 0.7);
+}
+.toggle { color: #737f99; }
+.toggle span { background: #242b3a; }
+.toggle input:checked + span { background: #ed792f; }
+
+.card {
+  background: linear-gradient(145deg, rgba(10, 16, 34, 0.98), rgba(6, 11, 24, 0.98));
+  border-color: #182137;
+  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.32);
+}
+.card-title { border-color: #182137; }
+.card-title span, .chart-note, footer { color: #52617c; }
+
+th {
+  color: #687897;
+  background: #0c1223;
+  border-color: #1b2438;
+}
+td { color: #aeb7ca; border-color: rgba(91, 108, 141, 0.08); }
+tbody tr:hover { background: rgba(255, 126, 46, 0.045); }
+td.case { color: #f5f6f8; }
+
+.positive { color: #13d69d; background: rgba(19, 214, 157, 0.1); }
+.neutral, .due { color: #ffb020; background: rgba(255, 176, 32, 0.1); }
+.negative, .critical, .overdue { color: #ff526e; background: rgba(255, 82, 110, 0.1); }
+.rank {
+  background: linear-gradient(145deg, #ff762d, #e55d22);
+  box-shadow: 0 5px 14px rgba(255, 101, 35, 0.25);
+}
+
+.ring {
+  background: conic-gradient(#ff8433 0 var(--pct), #171e30 var(--pct));
+  filter: drop-shadow(0 12px 22px rgba(255, 117, 39, 0.14));
+}
+.ring::before {
+  background: radial-gradient(circle at 40% 35%, #11192c, #070c18 70%);
+  border-color: #242e45;
+}
+.ring small, .meter p, .empty, .breach-item { color: #657493; }
+
+/* Semicircular weight gauge */
+.meter-card { position: relative; }
+.meter-card::after { content: ''; position: absolute; width: 230px; height: 120px; left: 50%; bottom: 28px; transform: translateX(-50%); background: rgba(255, 116, 38, .11); filter: blur(55px); pointer-events: none; }
+.meter { padding-top: 8px; }
+.gauge { position: relative; width: min(100%, 430px); z-index: 1; }
+.gauge svg { display: block; width: 100%; overflow: visible; }
+.gauge path { fill: none; stroke-linecap: round; }
+.gauge-track { stroke: #171e2e; stroke-width: 28; }
+.gauge-zone { stroke-width: 20; opacity: .68; }
+.zone-low { stroke: #20c889; stroke-dasharray: 55 100; }
+.zone-mid { stroke: #f3b51b; stroke-dasharray: 20 100; stroke-dashoffset: -55; }
+.zone-high { stroke: #ff4968; stroke-dasharray: 25 100; stroke-dashoffset: -75; }
+.gauge-progress { stroke: #fff3e9; stroke-width: 4; stroke-dasharray: 0 100; filter: url(#gaugeGlow); transition: stroke-dasharray .8s cubic-bezier(.2,.8,.2,1); }
+.gauge-needle { transform-origin: 180px 180px; transform: rotate(0deg); transition: transform .85s cubic-bezier(.2,.8,.2,1); filter: drop-shadow(0 0 8px rgba(255,125,47,.75)); }
+.gauge-needle path { fill: #ff8133; }
+.gauge-needle circle:first-of-type { fill: #ff8133; stroke: #ffd2b5; stroke-width: 2; }
+.gauge-needle circle:last-of-type { fill: #111827; }
+.gauge text { fill: #7886a4; font: 700 11px Manrope; }
+.gauge-min { text-anchor: middle; }.gauge-max { text-anchor: middle; }
+.gauge-value { position: absolute; left: 50%; top: 52%; transform: translate(-50%,-50%); text-align: center; white-space: nowrap; }
+.gauge-value strong { display: block; color: #f7f8fb; font: 800 clamp(32px,4vw,52px)/1 Manrope; letter-spacing: -2px; text-shadow: 0 5px 25px rgba(255,255,255,.12); }
+.gauge-value small { display: block; margin-top: 10px; color: #7886a4; font: 700 8px DM Sans; letter-spacing: 2.4px; }
+.meter-context { display: flex; min-height: 44px; margin-top: -7px; align-items: center; flex-direction: column; }
+.meter-context p { margin: 3px 0 0; }
+.gauge[data-zone="low"] .gauge-needle path,.gauge[data-zone="low"] .gauge-needle circle:first-of-type { fill: #20c889; }
+.gauge[data-zone="mid"] .gauge-needle path,.gauge[data-zone="mid"] .gauge-needle circle:first-of-type { fill: #f3b51b; }
+.details summary { color: #d9dce3; }
+
+.loader {
+  background: rgba(3, 6, 15, 0.975);
+}
+.loader-mark span {
+  border-color: #242d43;
+  border-top-color: #ff7d30;
+  border-right-color: #ff9d3c;
+}
+.loader p, .loader > strong { color: #667593; }
+.loader .progress { background: #20283b; }
+.loader .progress i { background: linear-gradient(90deg, #ff742c, #ff9f3d); }
+
+.toast {
+  color: #e7e9ee;
+  background: #0c1222;
+  border-color: #303950;
+}

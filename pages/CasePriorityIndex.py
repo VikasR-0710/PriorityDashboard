@@ -1,4 +1,3 @@
-import streamlit as st
 import pandas as pd
 import hashlib
 import json
@@ -10,6 +9,7 @@ import os
 from datetime import datetime, timedelta
 from services.case_service import CaseService
 from services.snowflake_service import SnowflakeService # <-- ADDED IMPORT
+from services.cache import singleton, ttl_cache
 
 ALL_REGIONS_OPTION = "ALL"
 ALL_PRIORITY_OPTION = "All priority"
@@ -22,12 +22,12 @@ LOW_PRIORITY_RECORD_TYPES = {
 # ---------------------------------------------------------------------------
 # 🔑 CONNECTIONS & CACHING
 # ---------------------------------------------------------------------------
-@st.cache_resource
+@singleton
 def get_sf_connection():
     service = CaseService()
     return service.get_connection()
 
-@st.cache_resource
+@singleton
 def get_snowflake_connection():
     # UPDATED: Now uses the centralized SnowflakeService which handles Delinea
     sf_service = SnowflakeService()
@@ -54,44 +54,7 @@ def ensure_audit_table_exists():
     except Exception:
         pass
 
-def inject_custom_css():
-    # UPDATED: Added CSS for the modern toggle switch
-    st.markdown("""<style>
-    [data-testid="stSidebar"] { display: none !important; }
-    [data-testid="collapsedControl"] { display: none !important; }
-    .main { padding-top:10px; } .block-container { padding-top:1rem; }
-    h1 { font-size:42px !important; font-weight:800 !important; }
-    [data-testid="stHorizontalBlock"] { gap:0.2rem; } p { font-size:12px !important; }
-    button { font-size:11px !important; padding:0.1rem !important; }        
-    
-    /* 🎯 Modern Toggle Styling */
-    div[data-testid="stToggle"] > label {
-        flex-direction: row-reverse !important;
-        justify-content: flex-end !important;
-        gap: 8px !important;
-    }
-    div[data-testid="stToggle"] > label > div:first-child {
-        margin-right: 0 !important;
-    }
-    /* Force the toggle track to use the accent color when active */
-    button[data-baseweb="toggle"] {
-        background-color: transparent !important;
-    }
-    button[data-baseweb="toggle"] > div {
-        background-color: #334155 !important; /* Off state color */
-        transition: all 0.2s ease !important;
-    }
-    button[data-baseweb="toggle"][aria-checked="true"] > div {
-        background-color: #3B82F6 !important; /* On state color (Accent Blue) */
-    }
-    button[data-baseweb="toggle"] span {
-        color: #F8FAFC !important;
-        font-weight: 500 !important;
-        font-size: 12px !important;
-    }
-</style>""", unsafe_allow_html=True)
-
-@st.cache_data(ttl=3600)
+@ttl_cache(ttl=3600)
 def fetch_owner_config():
     try:
         conn = get_snowflake_connection()
@@ -118,7 +81,7 @@ def build_owner_name_filter(owner_names):
         raise ValueError("No owner names found in DBD_OWNER_DATA.")
     return "'" + "', '".join(safe_names) + "'"
 
-@st.cache_data(ttl=3600)
+@ttl_cache(ttl=3600)
 def fetch_snowflake_sentiments(refresh_token=None):
     # refresh_token is intentionally unused in the query.  It is part of the
     # Streamlit cache key so the background worker can request a fresh snapshot
@@ -286,7 +249,7 @@ def add_sla_hours_with_weekend_skip(start_dt, hours, support_level):
         remaining -= add_amt
     return current
 
-@st.cache_data(ttl=3600)
+@ttl_cache(ttl=3600)
 def get_case_due_date_field():
     try:
         sf = get_sf_connection()
@@ -333,7 +296,7 @@ def apply_due_date_sla_gate(start_dt, due_date_value, support_level=None):
         return due_date_sla_start
     return max(start_dt, due_date_sla_start)
 
-@st.cache_data(ttl=3600)
+@ttl_cache(ttl=3600)
 def get_project_support(project_id):
     sf = get_sf_connection()
     acc_res = sf.query(f"SELECT Name FROM Account WHERE Id='{project_id}' LIMIT 1")
@@ -342,7 +305,7 @@ def get_project_support(project_id):
     sup_res = sf.query(f"SELECT Support_Level__c FROM Case WHERE Account.Name LIKE '%{proj_name}%' AND Support_Level__c != NULL LIMIT 1")
     return sup_res["records"][0].get("Support_Level__c") if sup_res["records"] else None
 
-@st.cache_data(ttl=3600)
+@ttl_cache(ttl=3600)
 def fetch_cases(refresh_token=None):
     # See fetch_snowflake_sentiments(): the token isolates background refreshes
     # from the snapshot currently displayed in each browser session.
@@ -446,18 +409,6 @@ def is_generalized_comment(comment_body):
         "checking the issue", "update shortly", "out of office"]
     return any(phrase in body_lower for phrase in generic_phrases)
 
-def classify_latest_comment(comments, owner_region_map):
-    if not comments:
-        return "Internal Comment"
-
-    latest = comments[0]
-    created_by = (latest.get("CreatedBy") or {}).get("Name", "")
-    if created_by not in owner_region_map:
-        return "Customer Comment"
-    if is_generalized_comment(latest.get("CommentBody", "")):
-        return "Support Comment (Generalized)"
-    return "Support Comment"
-
 def get_processed_data(progress_callback=None, refresh_token=None):
     if progress_callback:
         progress_callback(5, "Initializing connections...")
@@ -504,15 +455,18 @@ def get_processed_data(progress_callback=None, refresh_token=None):
         published_comments = [
             comment for comment in comments if comment.get("IsPublished") is True
         ]
-        # Preserve the existing dashboard classification, which is based only
-        # on published comments. Internal activity is tracked separately for
-        # notification suppression and is not displayed as a changed label.
-        last_commenter = classify_latest_comment(published_comments, owner_region_map)
         latest_comment_is_internal = bool(
             comments and comments[0].get("IsPublished") is False
         )
+        last_commenter = "Internal Comment"
         
         if published_comments:
+            latest = published_comments[0]
+            created_by = (latest.get("CreatedBy") or {}).get("Name", "")
+            last_commenter = "Support Comment" if created_by in owner_region_map else "Customer Comment"
+            if last_commenter == "Support Comment":
+                if is_generalized_comment(latest.get("CommentBody", "")):
+                    last_commenter = "Support Comment (Generalized)"
             for comment in published_comments:
                 if (comment.get("CreatedBy") or {}).get("Name") == 'Customer Support User':
                     last_customer_comment_dt = convert_to_ist_dt(comment.get("CreatedDate"))
@@ -600,8 +554,6 @@ def _get_latest_states(sf_conn, case_numbers: list) -> dict:
 def sync_audit_history(df: pd.DataFrame):
     if df.empty: return
     ensure_audit_table_exists()
-    # This transient flag is used only by the Slack change detector. Excluding
-    # it preserves the existing audit schema and avoids false case updates.
     df = df.drop(columns=["Latest Comment Is Internal"], errors="ignore").copy()
     df["Escalated"] = df["Escalated"].astype(bool)
     df["SLA_Minutes"] = pd.to_numeric(df["SLA_Minutes"], errors="coerce")
@@ -651,132 +603,19 @@ def sync_audit_history(df: pd.DataFrame):
         except: pass
         cur.close()
 
-def clear_search():
-    """Callback to clear search before widget instantiation"""
-    if "search_case_input" in st.session_state:
-        del st.session_state["search_case_input"]
-
-def normalize_region_filter_selection():
-    selected = list(st.session_state.get("region_filter", []))
-    previous = list(st.session_state.get("selected_regions", [ALL_REGIONS_OPTION]))
-
-    if ALL_REGIONS_OPTION in selected and len(selected) > 1:
-        if ALL_REGIONS_OPTION in previous:
-            selected = [region for region in selected if region != ALL_REGIONS_OPTION]
-        else:
-            selected = [ALL_REGIONS_OPTION]
-
-    st.session_state.region_filter = selected
-    st.session_state.selected_regions = selected
-
-def normalize_priority_filter_selection():
-    selected = list(st.session_state.get("sla_filter", []))
-
-    if ALL_PRIORITY_OPTION in selected and len(selected) > 1:
-        selected = [ALL_PRIORITY_OPTION]
-
-    st.session_state.sla_filter = selected
-    st.session_state.selected_sla_status = selected
-
-def normalize_support_level_filter_selection():
-    selected = list(st.session_state.get("support_level_filter", []))
-    previous = list(st.session_state.get(
-        "selected_support_levels", [ALL_SUPPORT_LEVELS_OPTION]
-    ))
-
-    if ALL_SUPPORT_LEVELS_OPTION in selected and len(selected) > 1:
-        if ALL_SUPPORT_LEVELS_OPTION in previous:
-            selected = [level for level in selected if level != ALL_SUPPORT_LEVELS_OPTION]
-        else:
-            selected = [ALL_SUPPORT_LEVELS_OPTION]
-
-    st.session_state.support_level_filter = selected
-    st.session_state.selected_support_levels = selected
-
-def apply_filters_and_ranking(df):
-    # Compact, evenly aligned filter bar.
-    c1, c2, c3, c4, c5 = st.columns([1.0, 1.0, 1.0, 1.0, 1.0])
+def apply_filters_and_ranking(
+    df, selected_regions=None, selected_owners=None, selected_support_levels=None,
+    selected_priorities=None, search_query="", heal_desk_only=False,
+):
+    """Apply the original dashboard filtering and ranking rules without UI state."""
     owner_region_map = get_owner_region_map()
-    
-    with c1:
-        regions = sorted(set(owner_region_map.values()) - {"Agent"})
-        opts = [ALL_REGIONS_OPTION] + regions
-        if "region_filter" not in st.session_state:
-            st.session_state.region_filter = [ALL_REGIONS_OPTION]
-        else:
-            st.session_state.region_filter = [region for region in st.session_state.region_filter if region in opts]
-        st.session_state.selected_regions = st.session_state.region_filter
-        sel = st.multiselect("Region", opts, key="region_filter", on_change=normalize_region_filter_selection, label_visibility="collapsed",placeholder="Select Region")
-        st.session_state.selected_regions = sel
-        
-    active_regions = regions if ALL_REGIONS_OPTION in sel else sel
+    regions = sorted(set(owner_region_map.values()) - {"Agent"})
+    selected_regions = selected_regions or [ALL_REGIONS_OPTION]
+    active_regions = regions if ALL_REGIONS_OPTION in selected_regions else selected_regions
     avail_owners = sorted(o for o, r in owner_region_map.items() if r in active_regions) if active_regions else []
-    
-    with c2:
-        cur = list(st.session_state.get(
-            "owner_filter", st.session_state.get("selected_owners", [])
-        ))
-        cur = [owner for owner in cur if owner in avail_owners]
-        st.session_state.owner_filter = cur
-        st.session_state.selected_owners = cur
-        sel_owners = st.multiselect(
-            "Owner",
-            avail_owners,
-            key="owner_filter",
-            label_visibility="collapsed",
-            placeholder="Select Name",
-        )
-        st.session_state.selected_owners = sel_owners
-        
-    with c3:
-        support_levels = sorted(
-            str(level).strip()
-            for level in df.get("Support Level", pd.Series(dtype=str)).dropna().unique()
-            if str(level).strip()
-        )
-        support_options = [ALL_SUPPORT_LEVELS_OPTION] + support_levels
-        selected_support = list(st.session_state.get(
-            "support_level_filter", [ALL_SUPPORT_LEVELS_OPTION]
-        ))
-        selected_support = [
-            level for level in selected_support if level in support_options
-        ] or [ALL_SUPPORT_LEVELS_OPTION]
-        st.session_state.support_level_filter = selected_support
-        st.session_state.selected_support_levels = selected_support
-        sel_support_levels = st.multiselect(
-            "Support Level",
-            support_options,
-            key="support_level_filter",
-            on_change=normalize_support_level_filter_selection,
-            label_visibility="collapsed",
-            placeholder="🎧 Support Level",
-        )
-        st.session_state.selected_support_levels = sel_support_levels
-
-    with c4:
-        cats = [ALL_PRIORITY_OPTION, "Need Immediate Attention", "Need Secondary Attention"]
-        if "sla_filter" not in st.session_state:
-            st.session_state.sla_filter = st.session_state.get("selected_sla_status", [ALL_PRIORITY_OPTION])
-
-        current_sla = list(st.session_state.sla_filter)
-        current_sla = [status for status in current_sla if status in cats]
-        if ALL_PRIORITY_OPTION in current_sla and len(current_sla) > 1:
-            current_sla = [ALL_PRIORITY_OPTION]
-        st.session_state.sla_filter = current_sla
-        st.session_state.selected_sla_status = current_sla
-        sel_sla = st.multiselect("Prioritization", cats, key="sla_filter", on_change=normalize_priority_filter_selection, label_visibility="collapsed",placeholder="Know Priority Cases")
-        st.session_state.selected_sla_status = sel_sla
-        
-    with c5:
-        # 🎯 Sleek Search Bar with integrated clear button
-        search_query = st.text_input(
-            "Search",
-            placeholder="🔍 Case #", 
-            key="search_case_input",
-            label_visibility="collapsed"
-        )
-        # 🎯 MODERN HEAL DESK TOGGLE (Moved here for better layout)
-        st.toggle("🏥 Heal Desk Only", value=False, key="heal_desk_toggle", label_visibility="visible")
+    selected_owners = [owner for owner in (selected_owners or []) if owner in avail_owners]
+    selected_support_levels = selected_support_levels or [ALL_SUPPORT_LEVELS_OPTION]
+    selected_priorities = selected_priorities or [ALL_PRIORITY_OPTION]
     
     # 🔍 Apply Case Number Search Filter FIRST (before other filters)
     search_terms = []
@@ -795,32 +634,31 @@ def apply_filters_and_ranking(df):
         df = df[df["Region"].isin(active_regions)].copy()
         
     if not active_regions: 
-        return df.iloc[:0], [], search_query, st.session_state.get("heal_desk_toggle", False)
+        return df.iloc[:0], [], search_query, heal_desk_only
     
-    filtered = df[df["Case Owner"].isin(sel_owners)] if sel_owners else df
+    filtered = df[df["Case Owner"].isin(selected_owners)] if selected_owners else df
 
-    if sel_support_levels and ALL_SUPPORT_LEVELS_OPTION not in sel_support_levels:
+    if selected_support_levels and ALL_SUPPORT_LEVELS_OPTION not in selected_support_levels:
         filtered = filtered[
-            filtered["Support Level"].astype(str).str.strip().isin(sel_support_levels)
+            filtered["Support Level"].astype(str).str.strip().isin(selected_support_levels)
         ].copy()
     
     # 🎯 Apply Heal Desk Filter
-    is_heal_desk_filter = st.session_state.get("heal_desk_toggle", False)
-    if is_heal_desk_filter:
+    if heal_desk_only:
         filtered = filtered[filtered["Is_Heal_Desk"] == True].copy()
     
     # 🎯 Apply Prioritization ONLY if no specific case search is active.
-    if sel_sla and not search_query:
+    if selected_priorities and not search_query:
         filtered = filtered.sort_values(by=["Case Score", "SLA_Minutes"], ascending=[False, True]).reset_index(drop=True)
-        if ALL_PRIORITY_OPTION in sel_sla:
+        if ALL_PRIORITY_OPTION in selected_priorities:
             filtered["Sequential_Rank"] = range(1, len(filtered) + 1)
         else:
             rows_to_keep = []
-            if "Need Immediate Attention" in sel_sla: rows_to_keep.extend(range(0, min(25, len(filtered))))
-            if "Need Secondary Attention" in sel_sla: rows_to_keep.extend(range(25, min(50, len(filtered))))
+            if "Need Immediate Attention" in selected_priorities: rows_to_keep.extend(range(0, min(25, len(filtered))))
+            if "Need Secondary Attention" in selected_priorities: rows_to_keep.extend(range(25, min(50, len(filtered))))
             rows_to_keep = sorted(set(rows_to_keep))
             filtered = filtered.iloc[rows_to_keep].reset_index(drop=True)
-            filtered["Sequential_Rank"] = [i + 1 for i in rows_to_keep] if len(sel_sla) == 2 else range(1, len(filtered) + 1)
+            filtered["Sequential_Rank"] = [i + 1 for i in rows_to_keep] if len(selected_priorities) == 2 else range(1, len(filtered) + 1)
     elif not filtered.empty:
         filtered = filtered.sort_values(by=["Case Owner", "Case Score"], ascending=[True, False])
         filtered["Sequential_Rank"] = filtered.groupby("Case Owner").cumcount() + 1
@@ -830,119 +668,4 @@ def apply_filters_and_ranking(df):
         filtered = filtered.reset_index(drop=True)
         filtered["Sequential_Rank"] = range(1, len(filtered) + 1)
             
-    return filtered, sel_owners if sel_owners else avail_owners, search_query, is_heal_desk_filter
-
-def render_table(filtered_df, cases):
-    st.subheader(":clipboard: Case Priority Index")
-    
-    if "sort_column" not in st.session_state: 
-        st.session_state.sort_column = None
-    if "sort_asc" not in st.session_state: 
-        st.session_state.sort_asc = True
-
-    col_config = [
-        ("Region", 0.7, "left"),
-        ("Case", 0.9, "left"),
-        ("Customer", 2.2, "left"),
-        ("Owner", 1.8, "left"),
-        ("Support Level", 1.5, "center"),
-        ("Severity", 0.7, "center"),
-        ("Status", 0.9, "center"),
-        ("Escalated", 0.8, "center"),
-        ("Sentiment", 1.2, "center"),
-        ("Last Comment", 1.5, "left"),
-        ("SLA Deadline", 1.8, "left"),
-        ("Sevone", 0.8, "center"),
-        ("Priority", 0.6, "center")
-    ]
-    
-    col_widths = [width for _, width, _ in col_config]
-    col_mapping = {name: df_col for name, _, df_col in [
-        ("Region", 0.7, "Region"),
-        ("Case", 0.9, "Case Number"),
-        ("Customer", 2.2, "Customer Name"),
-        ("Owner", 1.8, "Case Owner"),
-        ("Support Level", 1.5, "Support Level"),
-        ("Severity", 0.7, "Severity"),
-        ("Status", 0.9, "Status"),
-        ("Escalated", 0.8, "Escalated"),
-        ("Sentiment", 1.2, "Sentiment"),
-        ("Last Comment", 1.5, "Last Comment By"),
-        ("SLA Deadline", 1.8, "SLA Response Time"),
-        ("Sevone", 0.8, "Sevone"),
-        ("Priority", 0.6, "Sequential_Rank")
-    ]}
-    
-    report_box = st.container(height=400)
-    
-    with report_box:
-        headers = st.columns(col_widths)
-        for i, (col_name, width, align) in enumerate(col_config):
-            df_col = col_mapping[col_name]
-            icon = " ▲" if st.session_state.sort_column == df_col and st.session_state.sort_asc else " ▼" if st.session_state.sort_column == df_col else ""
-            
-            if headers[i].button(f"{col_name}{icon}", key=f"sort_{df_col}", use_container_width=True):
-                if st.session_state.sort_column == df_col:
-                    st.session_state.sort_asc = not st.session_state.sort_asc
-                else:
-                    st.session_state.sort_column, st.session_state.sort_asc = df_col, True
-                st.rerun()
-        
-        st.markdown("---")
-        
-        display_df = filtered_df.copy()
-        if st.session_state.sort_column and st.session_state.sort_column in display_df.columns:
-            target = "SLA_Minutes" if st.session_state.sort_column == "SLA Response Time" else st.session_state.sort_column
-            display_df = display_df.sort_values(by=target, ascending=st.session_state.sort_asc)
-        
-        for idx, row in display_df.iterrows():
-            cols = st.columns(col_widths)
-            
-            cols[0].markdown(f"<div style='text-align: left; font-size: 11px;'>{row['Region']}</div>", unsafe_allow_html=True)
-            cols[1].markdown(f"<div style='text-align: left; font-size: 11px; font-weight: 600;'>{row['Case Number']}</div>", unsafe_allow_html=True)
-            cols[2].markdown(f"<div style='text-align: left; font-size: 11px;'>{row['Customer Name']}</div>", unsafe_allow_html=True)
-            cols[3].markdown(f"<div style='text-align: left; font-size: 11px;'>{row['Case Owner']}</div>", unsafe_allow_html=True)
-            cols[4].markdown(f"<div style='text-align: center; font-size: 11px;'>{row['Support Level']}</div>", unsafe_allow_html=True)
-            cols[5].markdown(f"<div style='text-align: center; font-size: 11px;'>{row['Severity']}</div>", unsafe_allow_html=True)
-            cols[6].markdown(f"<div style='text-align: center; font-size: 11px;'>{row['Status']}</div>", unsafe_allow_html=True)
-            
-            escalated_text = "Yes" if row['Escalated'] else "No"
-            cols[7].markdown(f"<div style='text-align: center; font-size: 11px;'>{escalated_text}</div>", unsafe_allow_html=True)
-            
-            sentiment = row["Sentiment"]
-            sentiment_cell = cols[8]
-            if not sentiment or sentiment.strip() == "" or sentiment == "sentiment not available yet":
-                sentiment_cell.info("N/A")
-            else:
-                s_low = sentiment.lower()
-                if "positive" in s_low:
-                    sentiment_cell.success(sentiment)
-                elif "neutral" in s_low or "medium" in s_low:
-                    sentiment_cell.warning(sentiment)
-                elif "negative" in s_low or "critical" in s_low:
-                    sentiment_cell.error(sentiment)
-                else:
-                    sentiment_cell.info(sentiment)
-            
-            cols[9].markdown(f"<div style='text-align: left; font-size: 11px;'>{row['Last Comment By']}</div>", unsafe_allow_html=True)
-            
-            sla_text = row['SLA Response Time']
-            sla_cell = cols[10]
-            if "Overdue" in str(sla_text):
-                sla_cell.error(sla_text)
-            elif "Due in" in str(sla_text):
-                sla_cell.warning(sla_text)
-            else:
-                sla_cell.markdown(f"<div style='text-align: left; font-size: 11px;'>{sla_text}</div>", unsafe_allow_html=True)
-            
-            sevone_text = "Yes" if row["Sevone"] else "No"
-            cols[11].markdown(f"<div style='text-align: center; font-size: 11px;'>{sevone_text}</div>", unsafe_allow_html=True)
-            
-            cols[12].markdown(
-                f"<div style='text-align: center; font-weight: 700; font-size: 13px; "
-                f"color: #FFFFFF; background-color: #FF4B4B; border-radius: 4px; padding: 2px 6px;'>"
-                f"{int(row['Sequential_Rank'])}</div>", 
-                unsafe_allow_html=True
-            )
-            
-            st.markdown("<div style='margin: 2px 0; border-bottom: 1px solid #262730;'></div>", unsafe_allow_html=True)
+    return filtered, selected_owners if selected_owners else avail_owners, search_query, heal_desk_only

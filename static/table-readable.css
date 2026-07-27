@@ -1,0 +1,113 @@
+/* Readability overrides for the case priority table. */
+html,
+body,
+.table-wrap,
+.breach-rows,
+.multi-options {
+  scrollbar-width: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+.table-wrap::-webkit-scrollbar,
+.breach-rows::-webkit-scrollbar,
+.multi-options::-webkit-scrollbar {
+  display: none;
+}
+
+.table-card table {
+  width: 100%;
+  min-width: 1400px;
+  table-layout: fixed;
+  font-size: 12px;
+}
+
+.table-card th {
+  position: sticky;
+  font-size: 10px;
+  padding: 12px 10px;
+  white-space: nowrap;
+}
+
+.sort-indicator {
+  display: inline-block;
+  margin-left: 3px;
+  color: #46536d;
+  font-size: 9px;
+  line-height: 1;
+  vertical-align: 1px;
+  opacity: .65;
+  transition: color .15s, opacity .15s, transform .15s;
+}
+
+.table-card th:hover .sort-indicator {
+  color: #9ca8bc;
+  opacity: 1;
+}
+
+.table-card th.sorted {
+  color: #f3f5f8;
+}
+
+.table-card th.sorted .sort-indicator {
+  color: #ff8833;
+  opacity: 1;
+  text-shadow: 0 0 8px rgba(255, 136, 51, .65);
+}
+
+.column-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 4;
+  touch-action: none;
+}
+
+.column-resizer::after {
+  content: '';
+  position: absolute;
+  top: 22%;
+  bottom: 22%;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+  transition: background .15s, box-shadow .15s;
+}
+
+.table-card th:hover .column-resizer::after,
+.resizing-column .column-resizer::after {
+  background: #ff8833;
+  box-shadow: 0 0 7px rgba(255, 136, 51, .65);
+}
+
+.resizing-column,
+.resizing-column * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+.table-card td {
+  padding: 10px;
+}
+
+.table-card .pill {
+  font-size: 10px;
+  padding: 4px 8px;
+}
+
+.table-card th:nth-child(1)  { width: 5%; }
+.table-card th:nth-child(2)  { width: 7%; }
+.table-card th:nth-child(3)  { width: 13%; }
+.table-card th:nth-child(4)  { width: 13%; }
+.table-card th:nth-child(5)  { width: 9%; }
+.table-card th:nth-child(6)  { width: 5%; }
+.table-card th:nth-child(7)  { width: 6%; }
+.table-card th:nth-child(8)  { width: 6%; }
+.table-card th:nth-child(9)  { width: 6%; }
+.table-card th:nth-child(10) { width: 12%; }
+.table-card th:nth-child(11) { width: 12%; }
+.table-card th:nth-child(12) { width: 4%; }
+.table-card th:nth-child(13) { width: 6%; }

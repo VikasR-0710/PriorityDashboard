@@ -1,9 +1,8 @@
-import streamlit as st
-import plotly.graph_objects as go
 import pandas as pd
 import time
 from datetime import datetime, timedelta
 import pytz
+from services.cache import ttl_cache
 
 from pages.CasePriorityIndex import (
     get_sf_connection, get_owner_region_map, build_owner_name_filter, is_generalized_comment,
@@ -14,7 +13,7 @@ from pages.CasePriorityIndex import (
 SLA_BREACH_IMPACT_TABLE = "DBD_SLA_BREACH_IMPACT"
 ACTIVE_CASE_STATUSES = {"New", "Open", "Assigned"}
 
-@st.cache_data(ttl=3600)
+@ttl_cache(ttl=3600)
 def get_all_breach_records():
     sf = get_sf_connection()
     owner_region_map = get_owner_region_map()
@@ -389,22 +388,17 @@ def sync_sla_breach_impact_history(current_priority_df=None):
     return total_rows
 
 
-def render_30_day_chart(active_owners, search_query="", is_heal_desk_filter=False):
-    st.markdown("<h3 style='color: #F8FAFC; margin-top: 0; margin-bottom: 10px;'>📊 Ongoing SLA Breaches</h3>", unsafe_allow_html=True)
-    
+def get_filtered_breach_data(active_owners, search_query="", is_heal_desk_filter=False):
+    """Return chart groups and details using the original breach filters."""
     all_breaches_df = get_all_breach_records()
-    
-    # Filter by active owners
+    if all_breaches_df.empty:
+        return {"months": [], "standard": [], "premium": [], "details": []}
     if active_owners:
         filtered_df = all_breaches_df[all_breaches_df['Case Owner'].isin(active_owners)]
     else:
         filtered_df = all_breaches_df.copy()
-    
-    #  Apply Heal Desk Filter
     if is_heal_desk_filter:
         filtered_df = filtered_df[filtered_df['Is_Heal_Desk'] == True].copy()
-    
-    # 🔍 Apply search filter if exists
     if search_query:
         search_terms = [term.strip() for term in search_query.split(",") if term.strip()]
         if search_terms:
@@ -412,51 +406,20 @@ def render_30_day_chart(active_owners, search_query="", is_heal_desk_filter=Fals
             for term in search_terms:
                 mask = mask | filtered_df["Case Number"].astype(str).str.contains(term, case=False, na=False)
             filtered_df = filtered_df[mask]
-
-    with st.container(border=True, height=350): 
-        if filtered_df.empty:
-            st.markdown("<div style='text-align:center; color:#94A3B8; padding:25px; font-size:14px;'>✨ No active SLA breaches for selected filters</div>", unsafe_allow_html=True)
-        else:
-            pivot_df = filtered_df.groupby(['Breach_Month', 'Support Tier']).size().unstack(fill_value=0)
-            for tier in ['Standard', 'Premium']:
-                if tier not in pivot_df.columns: pivot_df[tier] = 0
-            pivot_df = pivot_df.sort_index().tail(6)
-            
-            months = pivot_df.index.tolist()
-            formatted_months = [datetime.strptime(m, '%Y-%m').strftime("%b '%y") for m in months]
-            
-            fig = go.Figure()
-            fig.add_trace(go.Bar(x=formatted_months, y=pivot_df['Standard'].astype(int).tolist(), name='Standard',
-                marker_color='rgba(59, 130, 246, 0.95)', marker_line_color='rgba(37, 99, 235, 1)', width=0.35,
-                hovertemplate='<b>Standard</b><br> %{x}<br>🔴 %{y}<extra></extra>'))
-            fig.add_trace(go.Bar(x=formatted_months, y=pivot_df['Premium'].astype(int).tolist(), name='Premium',
-                marker_color='rgba(16, 185, 129, 0.95)', marker_line_color='rgba(5, 150, 105, 1)', width=0.35,
-                hovertemplate='<b>Premium</b><br>📅 %{x}<br> %{y}<extra></extra>'))
-                
-            fig.update_layout(barmode='group', bargap=0.15, bargroupgap=0.1, height=330,
-                margin=dict(l=45, r=15, t=25, b=50), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#F8FAFC", family="Inter, sans-serif", size=11),
-                xaxis=dict(tickangle=-45, gridcolor='#334155', tickfont=dict(size=10, color="#94A3B8")),
-                yaxis=dict(title="Breached Cases", gridcolor='#334155', tickfont=dict(size=10, color="#94A3B8")),
-                legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5, font=dict(size=10, color="#E2E8F0")),
-                annotations=[dict(x=0.5, y=1.02, xref="paper", yref="paper", 
-                    text=f"Total Active Breaches: <b>{len(filtered_df)}</b>", 
-                    showarrow=False, font=dict(size=11, color="#94A3B8"))])
-            st.plotly_chart(fig, use_container_width=True, theme=None)
-
-    if not filtered_df.empty:
-        with st.expander(f"🔍 View {len(filtered_df)} Breached Case Details", expanded=False):
-            display_cols = ['Case Number', 'Customer Name', 'Case Owner', 'Severity', 'Support Level', 'SLA Status', 'SLA Deadline', 'Last Customer Comment', 'Subject']
-            st.dataframe(filtered_df[display_cols].style.map(lambda v: 'color: #F87171; font-weight: 600;' if 'Overdue' in str(v) else '', subset=['SLA Status']),
-                use_container_width=True, height=200, hide_index=True,
-                column_config={"Case Number": st.column_config.TextColumn("Case #", width="small"), "Customer Name": st.column_config.TextColumn("Customer", width="medium"),
-                    "Case Owner": st.column_config.TextColumn("Owner", width="small"), "Severity": st.column_config.TextColumn("Sev", width="xsmall"),
-                    "Support Level": st.column_config.TextColumn("Support", width="small"), "SLA Status": st.column_config.TextColumn("Status", width="medium"),
-                    "SLA Deadline": st.column_config.TextColumn("Deadline", width="small"), 
-                    "Subject": st.column_config.TextColumn("Subject", width="large")})
-            p_count = (filtered_df['Support Tier'] == 'Premium').sum()
-            st.markdown(f"<div style='text-align:right; font-size:11px; color:#94A3B8; margin-top:8px;'><b>{len(filtered_df)-p_count}</b> Standard • <b>{p_count}</b> Premium breached cases</div>", unsafe_allow_html=True)
-    else:
-        st.markdown("<div style='text-align:center; color:#64748B; padding:12px; font-size:12px; margin-top:8px; border:1px dashed #334155; border-radius:6px;'>📭 No breached case details to display</div>", unsafe_allow_html=True)
-        
-    st.markdown("<div style='text-align:center; font-size:11px; color:#64748B; margin-top:8px; opacity:0.9;'>Showing SLA breaches for New/Open/Assigned cases • Data refreshed hourly</div>", unsafe_allow_html=True)
+    if filtered_df.empty:
+        return {"months": [], "standard": [], "premium": [], "details": []}
+    pivot_df = filtered_df.groupby(['Breach_Month', 'Support Tier']).size().unstack(fill_value=0)
+    for tier in ['Standard', 'Premium']:
+        if tier not in pivot_df.columns:
+            pivot_df[tier] = 0
+    pivot_df = pivot_df.sort_index().tail(6)
+    # Keep the drill-down count aligned with the six-month chart window.
+    visible_months = set(pivot_df.index)
+    detail_df = filtered_df[filtered_df['Breach_Month'].isin(visible_months)]
+    display_cols = ['Case Number', 'Customer Name', 'Case Owner', 'Severity', 'Support Level', 'SLA Status', 'SLA Deadline', 'Last Customer Comment', 'Subject', 'Support Tier']
+    return {
+        "months": [datetime.strptime(m, '%Y-%m').strftime("%b '%y") for m in pivot_df.index],
+        "standard": pivot_df['Standard'].astype(int).tolist(),
+        "premium": pivot_df['Premium'].astype(int).tolist(),
+        "details": detail_df[display_cols].to_dict(orient="records"),
+    }

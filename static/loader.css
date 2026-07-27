@@ -1,0 +1,29 @@
+.loader {
+  background: rgba(8, 18, 38, 0.965);
+  backdrop-filter: blur(1px);
+}
+
+.loader-mark { width: 58px; height: 58px; margin-bottom: 28px; }
+.loader-mark span {
+  border: 5px solid #2b3d5c;
+  border-top-color: #3b82f6;
+  border-right-color: #3b82f6;
+  animation: spin 1s linear infinite;
+}
+.loader h2 {
+  margin: 0; color: #f8fafc;
+  font: 700 20px Manrope, sans-serif; letter-spacing: -0.4px;
+}
+.loader p { margin: 17px 0 21px; color: #94a3b8; font-size: 14px; }
+.loader .progress {
+  width: 360px; height: 9px; overflow: hidden;
+  border-radius: 10px; background: #273957;
+}
+.loader .progress i {
+  display: block; width: 0; height: 100%; border-radius: 10px;
+  background: #3b82f6; animation: none; transition: width 0.45s ease;
+}
+.loader > strong {
+  margin-top: 13px; color: #94a3b8;
+  font: 700 16px Manrope, sans-serif;
+}

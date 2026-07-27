@@ -1,0 +1,7 @@
+.warnings { padding: 11px 15px; border: 1px solid #8b5c1b; background: #3b2912; border-radius: 9px; color: #ffd38a; margin-bottom: 14px; font-size: 12px; }
+.warnings div + div { margin-top: 6px; }
+.details { overflow-x: auto; }
+.breach-header, .breach-item { display: grid; grid-template-columns: 90px 1.1fr 1fr 55px 90px 130px 120px 1.6fr 1.6fr; gap: 12px; min-width: 1250px; }
+.breach-header { padding: 10px 18px; color: #8196a7; text-transform: uppercase; font-size: 9px; border-top: 1px solid var(--line); }
+.breach-item { padding: 10px; border-top: 1px solid var(--line); font-size: 10px; color: #abbac5; }
+.breach-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
