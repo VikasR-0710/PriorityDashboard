@@ -43,7 +43,7 @@ class SlackNotificationService:
         if not token.startswith("xoxb-"):
             raise RuntimeError(
                 "Slack credential is not a bot token. Expected a token starting "
-                "with 'xoxb-' from Delinea secret 'Agentic Support Slack Bot'."
+                "with 'xoxb-' from Delinea secret 15978."
             )
 
         from slack_sdk import WebClient

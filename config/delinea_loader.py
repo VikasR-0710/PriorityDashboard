@@ -27,6 +27,7 @@ _COMMENT = "Automated access by Xactly Support Agent"
 _FOLDER_SHARED = "433"
 _FOLDER_ORACLE = "796"
 _FOLDER_SYSADMIN = "798"
+_SLACK_SECRET_ID = 15978
 
 _ORACLE_SECRET_NAMES = {
     "secure1": "SECURE1 - Oracle", "secure2": "SECURE2 - Oracle",
@@ -158,9 +159,9 @@ def fetch_openai_credentials() -> dict | None:
         return None
 
 def fetch_slack_credentials() -> dict | None:
-    """Return the Agentic Support Slack Bot token from Delinea."""
+    """Return the Slack bot token from Delinea secret 15978."""
     try:
-        secret = _get_secret_by_name(_FOLDER_SHARED, "Agentic Support Slack Bot")
+        secret = _get_secret(_SLACK_SECRET_ID)
         if not secret:
             return None
         return {"bot_token": _field(secret, "API Key")}
