@@ -7,6 +7,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 
 SALESFORCE_USERNAME = os.getenv(
     "SALESFORCE_USERNAME"
@@ -43,9 +50,9 @@ APTEDGE_MODEL = os.getenv(
 class GCSNotificationSettings:
     """Non-secret notification controls. Slack credentials come from Delinea."""
 
-    enabled: bool = True
-    test_only: bool = False
-    dry_run: bool = False
+    enabled: bool = _env_bool("GCS_SLACK_ENABLED", True)
+    test_only: bool = _env_bool("GCS_SLACK_TEST_ONLY", False)
+    dry_run: bool = _env_bool("GCS_SLACK_DRY_RUN", False)
     recipient_scope: str = "NA EAST"
     additional_region_recipients: tuple[tuple[str, str], ...] = (
         ("NA WEST", "Sanjay Kademani"),

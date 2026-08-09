@@ -38,7 +38,23 @@ def get_snowflake_connection():
     )
 
 
+def close_cached_connections():
+    """Close process-wide HTTP/database resources during application shutdown."""
+    for sf in get_sf_connection.cache_values():
+        session = getattr(sf, "session", None)
+        if session and hasattr(session, "close"):
+            session.close()
+    for conn in get_snowflake_connection.cache_values():
+        try:
+            conn.close()
+        except Exception:
+            pass
+    get_sf_connection.clear()
+    get_snowflake_connection.clear()
+
+
 def ensure_audit_table_exists():
+    cur = None
     try:
         conn = get_snowflake_connection()
         cur = conn.cursor()
@@ -50,12 +66,15 @@ def ensure_audit_table_exists():
                 CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ)""")
         cur.execute("ALTER TABLE DBD_CASE_AUDIT_HISTORY SET DATA_RETENTION_TIME_IN_DAYS = 2")
         cur.execute("ALTER TABLE DBD_CASE_AUDIT_HISTORY CLUSTER BY (SNAPSHOT_TIMESTAMP, CASE_NUMBER)")
-        cur.close()
     except Exception:
         pass
+    finally:
+        if cur is not None:
+            cur.close()
 
 @ttl_cache(ttl=3600)
 def fetch_owner_config():
+    cursor = None
     try:
         conn = get_snowflake_connection()
         cursor = conn.cursor()
@@ -66,11 +85,13 @@ def fetch_owner_config():
             ORDER BY id, name
         """)
         rows = cursor.fetchall()
-        cursor.close()
         return {name: region for name, region in rows if name}
     except Exception as e:
         print(f"❌ Owner data fetch failed: {e}")
         return {}
+    finally:
+        if cursor is not None:
+            cursor.close()
 
 def get_owner_region_map():
     return fetch_owner_config()
@@ -81,21 +102,21 @@ def build_owner_name_filter(owner_names):
         raise ValueError("No owner names found in DBD_OWNER_DATA.")
     return "'" + "', '".join(safe_names) + "'"
 
-@ttl_cache(ttl=3600)
 def fetch_snowflake_sentiments(refresh_token=None):
-    # refresh_token is intentionally unused in the query.  It is part of the
-    # Streamlit cache key so the background worker can request a fresh snapshot
-    # without clearing (and therefore changing) the dashboard's visible cache.
+    # Deliberately uncached: each processed snapshot must read current data.
+    cursor = None
     try:
         conn = get_snowflake_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT CaseNumber, Sentiment FROM DBD_SENTIMENT_DATA")
         sentiments = {row[0]: row[1] for row in cursor.fetchall()}
-        cursor.close()
         return sentiments
     except Exception as e:
         print(f"❌ Snowflake fetch failed: {e}")
         return {}
+    finally:
+        if cursor is not None:
+            cursor.close()
 
 def is_low_priority_record_type_case(case):
     record_type_id = (case.get("RecordTypeId") or "").strip().lower()
@@ -305,10 +326,8 @@ def get_project_support(project_id):
     sup_res = sf.query(f"SELECT Support_Level__c FROM Case WHERE Account.Name LIKE '%{proj_name}%' AND Support_Level__c != NULL LIMIT 1")
     return sup_res["records"][0].get("Support_Level__c") if sup_res["records"] else None
 
-@ttl_cache(ttl=3600)
 def fetch_cases(refresh_token=None):
-    # See fetch_snowflake_sentiments(): the token isolates background refreshes
-    # from the snapshot currently displayed in each browser session.
+    # Deliberately uncached: snapshots own their data and old fetches must be releasable.
     sf = get_sf_connection()
     owner_names_str = build_owner_name_filter(get_owner_region_map().keys())
     due_date_field = get_case_due_date_field()
@@ -546,9 +565,11 @@ def _get_latest_states(sf_conn, case_numbers: list) -> dict:
     placeholders = ",".join(["%s"] * len(case_numbers))
     query = f"SELECT CASE_NUMBER, DATA_HASH, NEW_STATE FROM DBD_CASE_AUDIT_HISTORY WHERE CASE_NUMBER IN ({placeholders}) QUALIFY ROW_NUMBER() OVER (PARTITION BY CASE_NUMBER ORDER BY SNAPSHOT_TIMESTAMP DESC) = 1"
     cur = sf_conn.cursor()
-    cur.execute(query, case_numbers)
-    rows = cur.fetchall()
-    cur.close()
+    try:
+        cur.execute(query, case_numbers)
+        rows = cur.fetchall()
+    finally:
+        cur.close()
     return {row[0]: {"hash": row[1], "state": json.loads(row[2]) if row[2] else {}} for row in rows}
 
 def sync_audit_history(df: pd.DataFrame):

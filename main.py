@@ -25,7 +25,7 @@ from config.settings import gcs_notification_settings
 from jobs.case_change_notification_job import CaseChangeNotificationJob
 from pages.CasePriorityIndex import (
     ALL_PRIORITY_OPTION, ALL_REGIONS_OPTION, ALL_SUPPORT_LEVELS_OPTION,
-    apply_filters_and_ranking, fetch_owner_config, get_processed_data,
+    apply_filters_and_ranking, close_cached_connections, fetch_owner_config, get_processed_data,
     sync_audit_history,
 )
 from pages.OngoingSLABreaches import get_filtered_breach_data, sync_sla_breach_impact_history
@@ -34,13 +34,15 @@ from pages.WeightageMeter import get_weightage_summary
 from services.background_case_refresh_service import BackgroundCaseRefreshService
 from services.case_priority_snapshot_service import CasePrioritySnapshotService
 from services.notification_service import ShiftNotificationScheduler
+from services.performance_monitor_service import PerformanceMonitorService
 
 setup_snowflake_logging()
 BASE_DIR = Path(__file__).resolve().parent
 BACKGROUND_REFRESH_SECONDS = 60
 BACKGROUND_REFRESH_LABEL = "1 minute(s)"
-SESSION_TTL_SECONDS = int(os.getenv("GCS_SESSION_TTL_SECONDS", "86400"))
+SESSION_TTL_SECONDS = int(os.getenv("GCS_SESSION_TTL_SECONDS", "7200"))
 SESSION_CLEANUP_SECONDS = int(os.getenv("GCS_SESSION_CLEANUP_SECONDS", "900"))
+MAX_SESSIONS = max(1, int(os.getenv("GCS_MAX_SESSIONS", "100")))
 INITIAL_DELAY_MINUTES = 0.5
 INTERVAL_MINUTES = 60
 SLA_IMPACT_RUN_HOUR_IST = 18
@@ -62,7 +64,15 @@ def new_session_state():
 
 def get_session_state(client_id):
     with state_lock:
-        session = session_states.setdefault(client_id, new_session_state())
+        session = session_states.get(client_id)
+        if session is None:
+            if len(session_states) >= MAX_SESSIONS:
+                oldest_client_id = min(
+                    session_states, key=lambda key: session_states[key]["last_accessed"]
+                )
+                session_states.pop(oldest_client_id, None)
+            session = new_session_state()
+            session_states[client_id] = session
         session["last_accessed"] = time.time()
         return session
 
@@ -76,9 +86,8 @@ def cleanup_expired_sessions(now=None):
     return len(expired)
 
 
-def session_cleanup_loop():
-    while True:
-        time.sleep(SESSION_CLEANUP_SECONDS)
+def session_cleanup_loop(stop_event):
+    while not stop_event.wait(SESSION_CLEANUP_SECONDS):
         removed = cleanup_expired_sessions()
         if removed:
             print(f"GCS session cleanup: removed {removed} expired session(s).")
@@ -116,7 +125,7 @@ def load_visible_snapshot(client_id, claimed=False):
         )
         session["warnings"] = []
     try:
-        dataframe, cases = get_processed_data(
+        dataframe, _cases = get_processed_data(
             progress_callback=lambda percent, text: update_startup_progress(client_id, percent, text),
             refresh_token=f"ui-{uuid.uuid4()}",
         )
@@ -131,7 +140,7 @@ def load_visible_snapshot(client_id, claimed=False):
         except Exception as exc:
             session["warnings"].append(f"SLA breach impact synchronization failed: {exc}")
         update_startup_progress(client_id, 100, "Rendering dashboard...")
-        snapshot = {"dataframe": dataframe, "cases": cases, "loaded_at": time.time()}
+        snapshot = {"dataframe": dataframe, "loaded_at": time.time()}
         with state_lock:
             session["snapshot"] = snapshot
             session["progress"].update(
@@ -167,26 +176,37 @@ background_refresh = BackgroundCaseRefreshService(
     interval_seconds=BACKGROUND_REFRESH_SECONDS,
     on_refresh=notify_case_changes,
 )
+performance_monitor = PerformanceMonitorService(
+    table_name=os.getenv(
+        "GCS_PERFORMANCE_TABLE",
+        "CUSTOMER_SUPPORT_BOT_LOGS.CHAT_DATA.DBD_GCS_SERVER_PERFORMANCE",
+    ),
+    interval_seconds=int(os.getenv("GCS_PERFORMANCE_INTERVAL_SECONDS", "900")),
+    disk_path=BASE_DIR,
+)
 
 
-def sentiment_loop():
-    time.sleep(INITIAL_DELAY_MINUTES * 60)
-    while True:
+def sentiment_loop(stop_event):
+    if stop_event.wait(INITIAL_DELAY_MINUTES * 60):
+        return
+    while not stop_event.is_set():
         try:
             run_sentiment_analysis()
         except Exception as exc:
             print(f"❌ Pipeline execution failed: {exc}")
-        time.sleep(INTERVAL_MINUTES * 60)
+        if stop_event.wait(INTERVAL_MINUTES * 60):
+            return
 
 
-def sla_impact_loop():
+def sla_impact_loop(stop_event):
     ist = pytz.timezone("Asia/Kolkata")
-    while True:
+    while not stop_event.is_set():
         now = datetime.now(ist)
         target = now.replace(hour=SLA_IMPACT_RUN_HOUR_IST, minute=0, second=0, microsecond=0)
         if now >= target:
             target += timedelta(days=1)
-        time.sleep(max(60, int((target - now).total_seconds())))
+        if stop_event.wait(max(60, int((target - now).total_seconds()))):
+            return
         try:
             dataframe, _ = get_processed_data()
             sync_sla_breach_impact_history(dataframe)
@@ -209,19 +229,30 @@ async def lifespan(_app):
         runtime_lock_handle = None
         raise RuntimeError("Another Newgcs worker is already active; configure exactly one Uvicorn worker.") from exc
     background_refresh.start(run_immediately=False)
-    threading.Thread(target=sentiment_loop, daemon=True, name="sentiment-pipeline").start()
-    threading.Thread(target=sla_impact_loop, daemon=True, name="sla-impact-pipeline").start()
-    threading.Thread(target=session_cleanup_loop, daemon=True, name="session-cleanup").start()
-    def start_notification_scheduler():
-        try:
-            scheduler = ShiftNotificationScheduler(snapshot_loader=get_processed_data)
-            scheduler.start()
-        except Exception as exc:
-            print(f"Notification scheduler failed to start: {exc}")
-    threading.Thread(target=start_notification_scheduler, daemon=True, name="notification-scheduler-start").start()
+    performance_monitor.start(run_immediately=True)
+    stop_event = threading.Event()
+    runtime_threads = [
+        threading.Thread(target=sentiment_loop, args=(stop_event,), daemon=True, name="sentiment-pipeline"),
+        threading.Thread(target=sla_impact_loop, args=(stop_event,), daemon=True, name="sla-impact-pipeline"),
+        threading.Thread(target=session_cleanup_loop, args=(stop_event,), daemon=True, name="session-cleanup"),
+    ]
+    for thread in runtime_threads:
+        thread.start()
+    notification_scheduler = ShiftNotificationScheduler(snapshot_loader=get_processed_data)
+    try:
+        notification_scheduler.start()
+    except Exception as exc:
+        print(f"Notification scheduler failed to start: {exc}")
     try:
         yield
     finally:
+        stop_event.set()
+        notification_scheduler.stop()
+        performance_monitor.stop()
+        background_refresh.stop()
+        for thread in runtime_threads:
+            thread.join(timeout=5)
+        close_cached_connections()
         fcntl.flock(runtime_lock_handle.fileno(), fcntl.LOCK_UN)
         runtime_lock_handle.close()
         runtime_lock_handle = None

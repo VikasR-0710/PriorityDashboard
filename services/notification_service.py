@@ -43,7 +43,7 @@ class SlackNotificationService:
         if not token.startswith("xoxb-"):
             raise RuntimeError(
                 "Slack credential is not a bot token. Expected a token starting "
-                "with 'xoxb-' from Delinea secret 15978."
+                "with 'xoxb-' from Delinea secret 15978 'Xactly Support Slack Bot'."
             )
 
         from slack_sdk import WebClient
@@ -635,6 +635,11 @@ class ShiftNotificationScheduler:
             target=self._run, name="gcs-shift-notifications", daemon=True
         )
         self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
 
     def _next_run(self) -> tuple[str, datetime]:
         ist = pytz.timezone("Asia/Kolkata")

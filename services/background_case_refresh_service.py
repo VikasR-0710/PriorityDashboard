@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class BackgroundSnapshot:
     dataframe: pd.DataFrame
-    cases: list
     refreshed_at: float
 
 
@@ -33,6 +32,7 @@ class BackgroundCaseRefreshService:
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._restart_pending = False
         self._snapshot: BackgroundSnapshot | None = None
         self._last_error: str | None = None
 
@@ -54,11 +54,34 @@ class BackgroundCaseRefreshService:
         with self._lock:
             old_thread = self._thread
             self._stop_event.set()
-        if old_thread and old_thread.is_alive():
-            old_thread.join(timeout=5)
-        with self._lock:
+            if old_thread and old_thread.is_alive():
+                if self._restart_pending:
+                    return
+                self._restart_pending = True
+                threading.Thread(
+                    target=self._complete_restart,
+                    args=(old_thread, run_immediately),
+                    name="gcs-background-restart-coordinator",
+                    daemon=True,
+                ).start()
+                return
             self._thread = None
         self.start(run_immediately=run_immediately)
+
+    def _complete_restart(self, old_thread: threading.Thread, run_immediately: bool) -> None:
+        old_thread.join()
+        with self._lock:
+            if self._thread is old_thread:
+                self._thread = None
+            self._restart_pending = False
+        self.start(run_immediately=run_immediately)
+
+    def stop(self) -> None:
+        with self._lock:
+            thread = self._thread
+            self._stop_event.set()
+        if thread and thread.is_alive():
+            thread.join(timeout=5)
 
     def get_snapshot(self) -> BackgroundSnapshot | None:
         with self._lock:
@@ -74,8 +97,8 @@ class BackgroundCaseRefreshService:
         while not stop_event.is_set():
             try:
                 refresh_token = f"background-{time.time_ns()}"
-                dataframe, cases = self.loader(refresh_token=refresh_token)
-                snapshot = BackgroundSnapshot(dataframe, cases, time.time())
+                dataframe, _cases = self.loader(refresh_token=refresh_token)
+                snapshot = BackgroundSnapshot(dataframe, time.time())
                 with self._lock:
                     previous_snapshot = self._snapshot
                     self._snapshot = snapshot

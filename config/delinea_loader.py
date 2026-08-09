@@ -159,7 +159,7 @@ def fetch_openai_credentials() -> dict | None:
         return None
 
 def fetch_slack_credentials() -> dict | None:
-    """Return the Slack bot token from Delinea secret 15978."""
+    """Return the Xactly Support Slack Bot token from Delinea secret 15978."""
     try:
         secret = _get_secret(_SLACK_SECRET_ID)
         if not secret:

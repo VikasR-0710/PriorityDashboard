@@ -12,3 +12,4 @@ slack-sdk==3.39.0
 
 openai==2.41.1
 reportlab==5.0.0
+psutil==7.0.0

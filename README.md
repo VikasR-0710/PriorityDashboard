@@ -4,7 +4,7 @@
 
 This version uses FastAPI with a custom browser interface. Run exactly one Uvicorn worker because visible snapshots, caches, and background schedulers are process-local. Startup fails when `WEB_CONCURRENCY` or `UVICORN_WORKERS` is not `1`; an inter-process file lock also prevents a second worker from starting when those variables are absent or incorrect.
 
-Session snapshots expire after 24 hours of inactivity by default. Configure `GCS_SESSION_TTL_SECONDS` and `GCS_SESSION_CLEANUP_SECONDS` when required.
+Session snapshots expire after 2 hours of inactivity by default. Active sessions are unaffected because each request renews the session. Configure `GCS_SESSION_TTL_SECONDS` and `GCS_SESSION_CLEANUP_SECONDS` when required.
 
 Slack case-change alerts and shift digests are enabled. Keep `test_only` or `dry_run` controls enabled during notification testing rather than disabling the feature in source code.
 
@@ -904,8 +904,9 @@ Required application-managed Snowflake objects:
 Slack notifications are enabled in application code and currently scoped to
 all NA East analysts plus Sanjay Kademani in NA West. No other NA West analyst
 is included. Shift digests run on weekdays at APAC 06:00, EMEA 14:00, NA East
-18:00, and NA West 21:00 IST. The Slack bot token is loaded from Delinea secret
-`15978`, field `API Key`; it is never stored in this repository.
+18:00, and NA West 21:00 IST. The Slack bot token is loaded from Delinea folder
+`433`, secret ID `15978` (`Xactly Support Slack Bot`), field `API Key`; it is never stored
+in this repository.
 
 Before deployment, confirm that all required Snowflake objects exist, active
 analysts have exact-name email mappings in `SF_CASE_ANALYST`, dependencies are

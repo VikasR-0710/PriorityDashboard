@@ -501,7 +501,12 @@ def fetch_salesforce_cases():
     WHERE Status IN ('New', 'Open', 'Assigned') and Owner.Name IN ({owner_names_str})
     """
     print("📥 Fetching cases...")
-    return sf.query_all(query)["records"]
+    try:
+        return sf.query_all(query)["records"]
+    finally:
+        session = getattr(sf, "session", None)
+        if session and hasattr(session, "close"):
+            session.close()
 
 def analyze_sentiment(case_record, openai_client, usage_conn=None):
     latest_customer_comment = get_latest_customer_comment(case_record)
@@ -613,7 +618,10 @@ def main():
     
     openai_svc = OpenAIService()
     openai_client = openai_svc.get_connection()
-    prepare_and_upsert(cases, openai_client)
+    try:
+        prepare_and_upsert(cases, openai_client)
+    finally:
+        openai_client.close()
     print("🎉 Pipeline completed successfully.")
 
 if __name__ == "__main__":

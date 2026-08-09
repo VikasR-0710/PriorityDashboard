@@ -12,6 +12,10 @@ from datetime import datetime
 
 DEFAULT_LOG_TABLE = "CUSTOMER_SUPPORT_BOT_LOGS.CHAT_DATA.DBD_APP_LOG"
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+_INTERNAL_LOG_MARKERS = (
+    " snowflake.connector.",
+    " snowflake.connector:",
+)
 
 
 def _qualified_table_name():
@@ -25,13 +29,23 @@ def _qualified_table_name():
 class _SnowflakeLogWriter:
     def __init__(self, table_name):
         self.table_name = table_name
-        self.items = queue.Queue()
+        queue_size = max(100, int(os.getenv("GCS_LOG_QUEUE_MAX_ITEMS", "10000")))
+        self.items = queue.Queue(maxsize=queue_size)
+        self.dropped_messages = 0
+        self._drop_lock = threading.Lock()
         self.stop_marker = object()
         self.thread = threading.Thread(target=self._run, name="snowflake-app-log-writer", daemon=True)
         self.thread.start()
 
     def submit(self, created_at, stream_name, message):
-        self.items.put((created_at, stream_name, message))
+        try:
+            self.items.put_nowait((created_at, stream_name, message))
+            return True
+        except queue.Full:
+            # Logging must never consume unbounded application memory.
+            with self._drop_lock:
+                self.dropped_messages += 1
+            return False
 
     def close(self):
         if self.thread.is_alive():
@@ -81,15 +95,23 @@ class _SnowflakeLogStream:
         self.stream_name = stream_name
         self.lock = threading.RLock()
         self.pending = ""
+        self.max_pending_chars = max(1024, int(os.getenv("GCS_LOG_MAX_LINE_CHARS", "65536")))
         self._gcs_snowflake_log_stream = True
 
     def write(self, message):
         with self.lock:
             self.original_stream.write(message)
             self.original_stream.flush()
+            # Snowflake emits logs while this writer persists logs. Capturing
+            # those messages would feed them back into the same queue forever.
+            if threading.current_thread() is getattr(self.writer, "thread", None):
+                return
             self.pending += message
             while "\n" in self.pending:
                 line, self.pending = self.pending.split("\n", 1)
+                self._submit(line)
+            while len(self.pending) > self.max_pending_chars:
+                line, self.pending = self.pending[:self.max_pending_chars], self.pending[self.max_pending_chars:]
                 self._submit(line)
 
     def flush(self):
@@ -100,7 +122,9 @@ class _SnowflakeLogStream:
                 self.pending = ""
 
     def _submit(self, line):
-        if line.strip():
+        # Connector diagnostics are already printed locally. Persisting them
+        # through the connector itself creates a logging feedback loop.
+        if line.strip() and not any(marker in line for marker in _INTERNAL_LOG_MARKERS):
             self.writer.submit(datetime.now().astimezone(), self.stream_name, line)
 
     def isatty(self):
