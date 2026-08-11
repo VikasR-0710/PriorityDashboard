@@ -648,11 +648,11 @@ def apply_filters_and_ranking(
         mask = pd.Series(False, index=df.index)
         for term in search_terms:
             mask = mask | df["Case Number"].astype(str).str.contains(term, case=False, na=False)
-        df = df[mask].copy()
+        df = df[mask]
         
     # 🎯 FIX: APPLY REGION FILTER ALWAYS (Moved outside the `if search_terms:` block)
     if active_regions:
-        df = df[df["Region"].isin(active_regions)].copy()
+        df = df[df["Region"].isin(active_regions)]
         
     if not active_regions: 
         return df.iloc[:0], [], search_query, heal_desk_only
@@ -662,11 +662,11 @@ def apply_filters_and_ranking(
     if selected_support_levels and ALL_SUPPORT_LEVELS_OPTION not in selected_support_levels:
         filtered = filtered[
             filtered["Support Level"].astype(str).str.strip().isin(selected_support_levels)
-        ].copy()
+        ]
     
     # 🎯 Apply Heal Desk Filter
     if heal_desk_only:
-        filtered = filtered[filtered["Is_Heal_Desk"] == True].copy()
+        filtered = filtered[filtered["Is_Heal_Desk"] == True]
     
     # 🎯 Apply Prioritization ONLY if no specific case search is active.
     if selected_priorities and not search_query:

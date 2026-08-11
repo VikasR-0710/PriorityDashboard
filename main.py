@@ -49,16 +49,18 @@ SLA_IMPACT_RUN_HOUR_IST = 18
 
 state_lock = threading.RLock()
 session_states = {}
+visible_state = {
+    "snapshot": None,
+    "warnings": [],
+    "progress": {"ready": False, "loading": False, "percent": 0,
+                 "text": "Preparing to load...", "error": None},
+}
 runtime_lock_handle = None
 
 
 def new_session_state():
     return {
-        "snapshot": None,
         "last_accessed": time.time(),
-        "warnings": [],
-        "progress": {"ready": False, "loading": False, "percent": 0,
-                     "text": "Preparing to load...", "error": None},
     }
 
 
@@ -107,49 +109,58 @@ def dataframe_records(df):
     return [{key: serializable(value) for key, value in row.items()} for row in df.to_dict(orient="records")]
 
 
-def update_startup_progress(client_id, percent, text):
+def update_startup_progress(_client_id, percent, text):
     with state_lock:
-        get_session_state(client_id)["progress"].update(
+        visible_state["progress"].update(
             percent=int(percent), text=text, loading=True, error=None
         )
 
 
-def load_visible_snapshot(client_id, claimed=False):
-    session = get_session_state(client_id)
+def load_visible_snapshot(client_id, claimed=False, prefer_background=False):
+    """Publish one read-only UI snapshot without controlling the alert scheduler."""
     with state_lock:
-        if session["progress"]["loading"] and not claimed:
+        if visible_state["progress"]["loading"] and not claimed:
             return None
-        session["progress"].update(
+        visible_state["progress"].update(
             ready=False, loading=True, percent=0,
             text="Preparing to load...", error=None,
         )
-        session["warnings"] = []
+        visible_state["warnings"] = []
     try:
-        dataframe, _cases = get_processed_data(
-            progress_callback=lambda percent, text: update_startup_progress(client_id, percent, text),
-            refresh_token=f"ui-{uuid.uuid4()}",
-        )
+        background = background_refresh.get_completed_snapshot() if prefer_background else None
+        if background is not None:
+            dataframe = background.dataframe
+            loaded_at = background.refreshed_at
+            update_startup_progress(client_id, 90, "Publishing latest background data...")
+        else:
+            dataframe, _cases = get_processed_data(
+                progress_callback=lambda percent, text: update_startup_progress(client_id, percent, text),
+                refresh_token=f"ui-{uuid.uuid4()}",
+            )
+            loaded_at = time.time()
         update_startup_progress(client_id, 92, "Syncing audit history...")
         try:
             sync_audit_history(dataframe)
         except Exception as exc:
-            session["warnings"].append(f"Audit history synchronization failed: {exc}")
+            with state_lock:
+                visible_state["warnings"].append(f"Audit history synchronization failed: {exc}")
         update_startup_progress(client_id, 95, "Syncing SLA breach impact...")
         try:
             sync_sla_breach_impact_history(dataframe)
         except Exception as exc:
-            session["warnings"].append(f"SLA breach impact synchronization failed: {exc}")
+            with state_lock:
+                visible_state["warnings"].append(f"SLA breach impact synchronization failed: {exc}")
         update_startup_progress(client_id, 100, "Rendering dashboard...")
-        snapshot = {"dataframe": dataframe, "loaded_at": time.time()}
+        snapshot = {"dataframe": dataframe, "loaded_at": loaded_at}
         with state_lock:
-            session["snapshot"] = snapshot
-            session["progress"].update(
+            visible_state["snapshot"] = snapshot
+            visible_state["progress"].update(
                 ready=True, loading=False, percent=100, text="Rendering dashboard..."
             )
         return snapshot
     except Exception as exc:
         with state_lock:
-            session["progress"].update(ready=False, loading=False, error=str(exc))
+            visible_state["progress"].update(ready=False, loading=False, error=str(exc))
         raise
 
 
@@ -288,11 +299,11 @@ def index():
 @app.get("/api/startup-status")
 def startup_status(request: Request):
     client_id = request.state.gcs_client_id
-    session = get_session_state(client_id)
+    get_session_state(client_id)
     with state_lock:
-        progress = dict(session["progress"])
+        progress = dict(visible_state["progress"])
         if not progress["ready"] and not progress["loading"] and not progress["error"]:
-            session["progress"]["loading"] = True
+            visible_state["progress"]["loading"] = True
             progress["loading"] = True
             threading.Thread(
                 target=load_visible_snapshot, args=(client_id, True), daemon=True,
@@ -311,10 +322,13 @@ def dashboard(
 ):
     client_id = request.state.gcs_client_id
     with state_lock:
-        snapshot = get_session_state(client_id)["snapshot"]
+        get_session_state(client_id)
+        snapshot = visible_state["snapshot"]
     if snapshot is None:
         return {"ready": False}
-    df = snapshot["dataframe"].copy()
+    # The published snapshot is immutable. Filtering creates a new frame only
+    # when ranking adds request-specific columns, avoiding a full copy here.
+    df = snapshot["dataframe"]
     filtered, active_owners, search_query, heal_filter = apply_filters_and_ranking(
         df, region or [ALL_REGIONS_OPTION], owner,
         support or [ALL_SUPPORT_LEVELS_OPTION], priority or [ALL_PRIORITY_OPTION],
@@ -329,7 +343,7 @@ def dashboard(
     available_owners = sorted(name for name, value in owner_map.items() if value in active_regions)
     support_levels = sorted(str(v).strip() for v in df.get("Support Level", pd.Series(dtype=str)).dropna().unique() if str(v).strip())
     breaches = get_filtered_breach_data(active_owners, search_query, heal_filter)
-    background = background_refresh.get_snapshot()
+    background = background_refresh.get_completed_snapshot()
     return {
         "rows": dataframe_records(filtered),
         "filters": {
@@ -343,7 +357,7 @@ def dashboard(
         "loaded_at": snapshot["loaded_at"],
         "new_data_available": bool(background and background.refreshed_at > snapshot["loaded_at"]),
         "background_refreshed_at": background.refreshed_at if background else None,
-        "warnings": list(get_session_state(client_id)["warnings"]),
+        "warnings": list(visible_state["warnings"]),
         "footer": f"Backend data refreshes every {BACKGROUND_REFRESH_LABEL}. The visible index changes only when Refresh is clicked. Audit history retains 2-day change snapshots.",
     }
 
@@ -351,11 +365,11 @@ def dashboard(
 @app.post("/api/refresh")
 async def refresh(request: Request):
     client_id = request.state.gcs_client_id
-    background_refresh.restart(run_immediately=False)
-    fetch_owner_config.clear()
     with state_lock:
-        get_session_state(client_id)["progress"]["loading"] = False
-    snapshot = await asyncio.to_thread(load_visible_snapshot, client_id)
+        get_session_state(client_id)
+        if visible_state["progress"]["loading"]:
+            return {"ok": False, "reason": "A visible snapshot is already loading"}
+    snapshot = await asyncio.to_thread(load_visible_snapshot, client_id, False, True)
     if snapshot is None:
         return {"ok": False}
     return {"ok": True, "loaded_at": snapshot["loaded_at"]}

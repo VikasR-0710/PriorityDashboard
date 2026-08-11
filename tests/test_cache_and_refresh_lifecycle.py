@@ -34,6 +34,29 @@ class CacheLifecycleTests(unittest.TestCase):
 
 
 class RefreshLifecycleTests(unittest.TestCase):
+    def test_snapshot_is_not_completed_until_callback_returns(self):
+        callback_entered = threading.Event()
+        callback_release = threading.Event()
+
+        def loader(**_kwargs):
+            return [1], []
+
+        def on_refresh(_previous, _current):
+            callback_entered.set()
+            callback_release.wait(timeout=1)
+
+        service = BackgroundCaseRefreshService(loader, interval_seconds=60, on_refresh=on_refresh)
+        service.start(run_immediately=True)
+        self.assertTrue(callback_entered.wait(timeout=1))
+        self.assertIsNotNone(service.get_snapshot())
+        self.assertIsNone(service.get_completed_snapshot())
+        callback_release.set()
+        deadline = time.time() + 1
+        while service.get_completed_snapshot() is None and time.time() < deadline:
+            time.sleep(0.01)
+        service.stop()
+        self.assertIsNotNone(service.get_completed_snapshot())
+
     def test_restart_never_overlaps_loader_threads(self):
         entered = threading.Event()
         release = threading.Event()

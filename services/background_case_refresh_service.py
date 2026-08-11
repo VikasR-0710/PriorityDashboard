@@ -34,6 +34,7 @@ class BackgroundCaseRefreshService:
         self._thread: threading.Thread | None = None
         self._restart_pending = False
         self._snapshot: BackgroundSnapshot | None = None
+        self._completed_snapshot: BackgroundSnapshot | None = None
         self._last_error: str | None = None
 
     def start(self, run_immediately: bool = True) -> None:
@@ -87,6 +88,11 @@ class BackgroundCaseRefreshService:
         with self._lock:
             return self._snapshot
 
+    def get_completed_snapshot(self) -> BackgroundSnapshot | None:
+        """Return only a snapshot whose refresh callback has finished."""
+        with self._lock:
+            return self._completed_snapshot
+
     def get_last_error(self) -> str | None:
         with self._lock:
             return self._last_error
@@ -105,6 +111,8 @@ class BackgroundCaseRefreshService:
                     self._last_error = None
                 if self.on_refresh:
                     self.on_refresh(previous_snapshot, snapshot)
+                with self._lock:
+                    self._completed_snapshot = snapshot
                 logger.info("Background case snapshot refreshed (%s cases)", len(dataframe))
             except Exception as exc:
                 logger.exception("Background case refresh failed")
