@@ -33,22 +33,48 @@ class SlackNotificationService:
     def __init__(self, settings: GCSNotificationSettings = gcs_notification_settings):
         self.settings = settings
         self.client = None
+        self._client_lock = threading.Lock()
+        self._cached_token = None
+        # Do not create the client eagerly — create lazily to allow credential rotation.
         if not settings.enabled or settings.dry_run:
             return
 
-        credentials = fetch_slack_credentials()
-        token = credentials.get("bot_token") if credentials else None
-        if not token:
-            raise RuntimeError("Slack bot token is unavailable from Delinea")
-        if not token.startswith("xoxb-"):
-            raise RuntimeError(
-                "Slack credential is not a bot token. Expected a token starting "
-                "with 'xoxb-' from Delinea secret 15978 'Xactly Support Slack Bot'."
-            )
-
+    def _create_client(self, token: str):
         from slack_sdk import WebClient
 
-        self.client = WebClient(token=token)
+        return WebClient(token=token)
+
+    def _get_client(self):
+        """Lazily create or refresh the Slack WebClient in a thread-safe way.
+
+        Returns the client or None if credentials are unavailable.
+        """
+        with self._client_lock:
+            creds = fetch_slack_credentials()
+            token = creds.get("bot_token") if creds else None
+            if not token:
+                return None
+            if not token.startswith("xoxb-"):
+                return None
+            if self.client is None or token != self._cached_token:
+                # Close existing client if possible
+                try:
+                    old = self.client
+                    self.client = self._create_client(token)
+                    self._cached_token = token
+                    if old is not None:
+                        try:
+                            if hasattr(old, "close"):
+                                old.close()
+                            elif hasattr(old, "session") and hasattr(old.session, "close"):
+                                old.session.close()
+                        except Exception:
+                            pass
+                except Exception:
+                    # Fail silently and leave client None so callers can handle failures
+                    self.client = None
+                    self._cached_token = None
+            return self.client
 
     def send_priority_dm(
         self,
@@ -65,10 +91,10 @@ class SlackNotificationService:
                 case.get("Case Number"),
             )
             return SlackDeliveryResult(False, skipped=True)
-        if not self.client:
-            return SlackDeliveryResult(False, error="Slack client not initialized")
-
         try:
+            client = self._get_client()
+            if not client:
+                return SlackDeliveryResult(False, error="Slack client not initialized")
             user_id = self._find_user(recipient_email, recipient_name)
             if not user_id:
                 return SlackDeliveryResult(False, error=f"Slack user not found: {recipient_name}")
@@ -92,8 +118,8 @@ class SlackNotificationService:
                 {"type": "section", "text": {"type": "mrkdwn", "text": f"*Subject:*\n{subject}"}},
                 {"type": "context", "elements": [{"type": "mrkdwn", "text": "Automated notification from GCS Prioritisation Index."}]},
             ]
-            channel = self.client.conversations_open(users=[user_id])["channel"]["id"]
-            response = self.client.chat_postMessage(
+            channel = client.conversations_open(users=[user_id])["channel"]["id"]
+            response = client.chat_postMessage(
                 channel=channel,
                 text=f"GCS Priority Alert: {case_number}",
                 blocks=blocks,
@@ -127,12 +153,13 @@ class SlackNotificationService:
                 shift_name, len(cases), recipient_name,
             )
             return SlackDeliveryResult(False, skipped=True)
-        if not self.client:
-            return SlackDeliveryResult(False, error="Slack client not initialized")
         if not cases:
             return SlackDeliveryResult(False, skipped=True, error="No priority cases")
 
         try:
+            client = self._get_client()
+            if not client:
+                return SlackDeliveryResult(False, error="Slack client not initialized")
             user_id = self._find_user(recipient_email, recipient_name)
             if not user_id:
                 return SlackDeliveryResult(False, error=f"Slack user not found: {recipient_name}")
@@ -164,7 +191,7 @@ class SlackNotificationService:
                     numeric(case.get("SLA_Minutes"), float("inf")),
                 ),
             )
-            channel = self.client.conversations_open(users=[user_id])["channel"]["id"]
+            channel = client.conversations_open(users=[user_id])["channel"]["id"]
             page_size = max(1, min(self.settings.digest_cases_per_message, 20))
             pages = [
                 ranked_cases[index:index + page_size]
@@ -197,7 +224,7 @@ class SlackNotificationService:
                     footer += f"\n<{self.settings.dashboard_url}|Open GCS Prioritization Dashboard>"
                 blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": footer}]})
 
-                response = self.client.chat_postMessage(
+                response = client.chat_postMessage(
                     channel=channel,
                     text=(
                         f"GCS {shift_name} shift priority digest: "
@@ -214,6 +241,21 @@ class SlackNotificationService:
         except Exception as exc:
             logger.exception("Slack shift digest failed")
             return SlackDeliveryResult(False, error=str(exc))
+
+    def close(self):
+        """Close any cached client/transport if supported."""
+        with getattr(self, "_client_lock", threading.Lock()):
+            client = getattr(self, "client", None)
+            try:
+                if client is not None:
+                    if hasattr(client, "close"):
+                        client.close()
+                    elif hasattr(client, "session") and hasattr(client.session, "close"):
+                        client.session.close()
+            except Exception:
+                pass
+            self.client = None
+            self._cached_token = None
 
     def _digest_table_block(
         self,

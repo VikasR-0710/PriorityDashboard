@@ -56,6 +56,7 @@ visible_state = {
                  "text": "Preparing to load...", "error": None},
 }
 runtime_lock_handle = None
+_case_change_job = None
 
 
 def new_session_state():
@@ -174,7 +175,10 @@ def notify_case_changes(previous_snapshot, current_snapshot):
         print(f"⚠️ GCS case priority snapshot sync failed: {exc}")
     if gcs_notification_settings.enabled and not gcs_notification_settings.test_only:
         try:
-            CaseChangeNotificationJob().run(
+            global _case_change_job
+            if _case_change_job is None:
+                _case_change_job = CaseChangeNotificationJob()
+            _case_change_job.run(
                 previous_snapshot.dataframe if previous_snapshot else None,
                 current_snapshot.dataframe,
             )
@@ -263,6 +267,8 @@ async def lifespan(_app):
         background_refresh.stop()
         for thread in runtime_threads:
             thread.join(timeout=5)
+        if _case_change_job is not None:
+            _case_change_job.slack.close()
         close_cached_connections()
         fcntl.flock(runtime_lock_handle.fileno(), fcntl.LOCK_UN)
         runtime_lock_handle.close()
