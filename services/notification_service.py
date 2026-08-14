@@ -340,10 +340,10 @@ class SlackNotificationService:
                 change_type, case.get("Case Number"), recipient_name,
             )
             return SlackDeliveryResult(False, skipped=True)
-        if not self.client:
-            return SlackDeliveryResult(False, error="Slack client not initialized")
-
         try:
+            client = self._get_client()
+            if not client:
+                return SlackDeliveryResult(False, error="Slack client not initialized")
             user_id = self._find_user(recipient_email, recipient_name)
             if not user_id:
                 return SlackDeliveryResult(False, error=f"Slack user not found: {recipient_name}")
@@ -402,8 +402,8 @@ class SlackNotificationService:
                         else {case_number}
                     ),
                 ))
-            channel = self.client.conversations_open(users=[user_id])["channel"]["id"]
-            response = self.client.chat_postMessage(
+            channel = client.conversations_open(users=[user_id])["channel"]["id"]
+            response = client.chat_postMessage(
                 channel=channel,
                 text=f"GCS Alert: {title} - {case_number}",
                 blocks=blocks,
