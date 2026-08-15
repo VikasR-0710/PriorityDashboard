@@ -562,6 +562,10 @@ Return ONLY one word: Positive, Neutral, Negative, or Critical."""
         return "Analysis Error"
 
 def prepare_and_upsert(cases, openai_client):
+    return _prepare_and_upsert_impl(cases, openai_client)
+
+
+def _prepare_and_upsert_impl(cases, openai_client):
     cases_with_customer_comment = []
     processed = []
     for case in cases:

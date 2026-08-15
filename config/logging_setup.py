@@ -73,19 +73,9 @@ class _SnowflakeLogWriter:
                 return
 
     def _write_batch(self, rows):
-        from services.snowflake_service import SnowflakeService
-        database, schema, _ = self.table_name.split(".")
-        conn = SnowflakeService().connect(database=database, schema=schema)
-        cursor = conn.cursor()
-        try:
-            cursor.executemany(
-                f"INSERT INTO {self.table_name} (LOGGED_AT, STREAM, MESSAGE, HOST_NAME) VALUES (%s, %s, %s, %s)",
-                [(*row, socket.gethostname()) for row in rows],
-            )
-            conn.commit()
-        finally:
-            cursor.close()
-            conn.close()
+        from services.isolated_snowflake_operations import write_application_log_batch
+
+        write_application_log_batch(self.table_name, rows)
 
 
 class _SnowflakeLogStream:

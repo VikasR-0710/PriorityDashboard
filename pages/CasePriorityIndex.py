@@ -429,6 +429,10 @@ def is_generalized_comment(comment_body):
     return any(phrase in body_lower for phrase in generic_phrases)
 
 def get_processed_data(progress_callback=None, refresh_token=None):
+    return _get_processed_data_impl(progress_callback, refresh_token)
+
+
+def _get_processed_data_impl(progress_callback=None, refresh_token=None):
     if progress_callback:
         progress_callback(5, "Initializing connections...")
         
@@ -545,7 +549,8 @@ def get_processed_data(progress_callback=None, refresh_token=None):
     if progress_callback:
         progress_callback(88, "Finalizing dashboard data...")
         
-    return pd.DataFrame(dashboard), cases
+    dataframe = pd.DataFrame(dashboard)
+    return dataframe, cases
 
 def _make_serializable(obj):
     if isinstance(obj, float) and (math.isinf(obj) or math.isnan(obj)): return None

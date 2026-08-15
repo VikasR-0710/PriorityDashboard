@@ -6,6 +6,8 @@ import asyncio
 import fcntl
 import math
 import os
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -22,24 +24,27 @@ from fastapi.staticfiles import StaticFiles
 
 from config.logging_setup import setup_snowflake_logging
 from config.settings import gcs_notification_settings
-from jobs.case_change_notification_job import CaseChangeNotificationJob
 from pages.CasePriorityIndex import (
     ALL_PRIORITY_OPTION, ALL_REGIONS_OPTION, ALL_SUPPORT_LEVELS_OPTION,
     apply_filters_and_ranking, close_cached_connections, fetch_owner_config, get_processed_data,
-    sync_audit_history,
 )
-from pages.OngoingSLABreaches import get_filtered_breach_data, sync_sla_breach_impact_history
-from pages.Sentiment_analysis import main as run_sentiment_analysis
+from pages.OngoingSLABreaches import get_filtered_breach_data
 from pages.WeightageMeter import get_weightage_summary
 from services.background_case_refresh_service import BackgroundCaseRefreshService
-from services.case_priority_snapshot_service import CasePrioritySnapshotService
 from services.notification_service import ShiftNotificationScheduler
 from services.performance_monitor_service import PerformanceMonitorService
+from services.isolated_snowflake_operations import (
+    sync_audit_history as isolated_sync_audit_history,
+    sync_sla_breach_impact_history as isolated_sync_sla_breach_impact_history,
+    sync_priority_snapshot as isolated_sync_priority_snapshot,
+    get_processed_data as isolated_get_processed_data,
+)
+from services.isolated_notification_operations import run_case_change_notifications
 
 setup_snowflake_logging()
 BASE_DIR = Path(__file__).resolve().parent
 BACKGROUND_REFRESH_SECONDS = 60
-BACKGROUND_REFRESH_LABEL = "1 minute(s)"
+BACKGROUND_REFRESH_LABEL = "1 minute"
 SESSION_TTL_SECONDS = int(os.getenv("GCS_SESSION_TTL_SECONDS", "7200"))
 SESSION_CLEANUP_SECONDS = int(os.getenv("GCS_SESSION_CLEANUP_SECONDS", "900"))
 MAX_SESSIONS = max(1, int(os.getenv("GCS_MAX_SESSIONS", "100")))
@@ -56,7 +61,6 @@ visible_state = {
                  "text": "Preparing to load...", "error": None},
 }
 runtime_lock_handle = None
-_case_change_job = None
 
 
 def new_session_state():
@@ -119,6 +123,11 @@ def update_startup_progress(_client_id, percent, text):
 
 def load_visible_snapshot(client_id, claimed=False, prefer_background=False):
     """Publish one read-only UI snapshot without controlling the alert scheduler."""
+    return _load_visible_snapshot_impl(client_id, claimed, prefer_background)
+
+
+def _load_visible_snapshot_impl(client_id, claimed=False, prefer_background=False):
+    """Publish one read-only UI snapshot without controlling the alert scheduler."""
     with state_lock:
         if visible_state["progress"]["loading"] and not claimed:
             return None
@@ -141,13 +150,13 @@ def load_visible_snapshot(client_id, claimed=False, prefer_background=False):
             loaded_at = time.time()
         update_startup_progress(client_id, 92, "Syncing audit history...")
         try:
-            sync_audit_history(dataframe)
+            isolated_sync_audit_history(dataframe)
         except Exception as exc:
             with state_lock:
                 visible_state["warnings"].append(f"Audit history synchronization failed: {exc}")
         update_startup_progress(client_id, 95, "Syncing SLA breach impact...")
         try:
-            sync_sla_breach_impact_history(dataframe)
+            isolated_sync_sla_breach_impact_history(dataframe)
         except Exception as exc:
             with state_lock:
                 visible_state["warnings"].append(f"SLA breach impact synchronization failed: {exc}")
@@ -167,7 +176,7 @@ def load_visible_snapshot(client_id, claimed=False, prefer_background=False):
 
 def notify_case_changes(previous_snapshot, current_snapshot):
     try:
-        CasePrioritySnapshotService().sync(
+        isolated_sync_priority_snapshot(
             current_snapshot.dataframe,
             datetime.fromtimestamp(current_snapshot.refreshed_at, tz=pytz.utc),
         )
@@ -175,19 +184,17 @@ def notify_case_changes(previous_snapshot, current_snapshot):
         print(f"⚠️ GCS case priority snapshot sync failed: {exc}")
     if gcs_notification_settings.enabled and not gcs_notification_settings.test_only:
         try:
-            global _case_change_job
-            if _case_change_job is None:
-                _case_change_job = CaseChangeNotificationJob()
-            _case_change_job.run(
+            stats = run_case_change_notifications(
                 previous_snapshot.dataframe if previous_snapshot else None,
                 current_snapshot.dataframe,
             )
+            print(f"ℹ️ GCS case change notification stats: {stats}")
         except Exception as exc:
             print(f"⚠️ GCS case change notifications failed: {exc}")
 
 
 background_refresh = BackgroundCaseRefreshService(
-    loader=get_processed_data,
+    loader=isolated_get_processed_data,
     interval_seconds=BACKGROUND_REFRESH_SECONDS,
     on_refresh=notify_case_changes,
 )
@@ -206,7 +213,11 @@ def sentiment_loop(stop_event):
         return
     while not stop_event.is_set():
         try:
-            run_sentiment_analysis()
+            subprocess.run(
+                [sys.executable, "-c", "from pages.Sentiment_analysis import main; main()"],
+                cwd=str(BASE_DIR),
+                check=True,
+            )
         except Exception as exc:
             print(f"❌ Pipeline execution failed: {exc}")
         if stop_event.wait(INTERVAL_MINUTES * 60):
@@ -223,8 +234,8 @@ def sla_impact_loop(stop_event):
         if stop_event.wait(max(60, int((target - now).total_seconds()))):
             return
         try:
-            dataframe, _ = get_processed_data()
-            sync_sla_breach_impact_history(dataframe)
+            dataframe, _ = isolated_get_processed_data()
+            isolated_sync_sla_breach_impact_history(dataframe)
         except Exception as exc:
             print(f"❌ Daily SLA breach impact sync failed: {exc}")
 
@@ -253,7 +264,7 @@ async def lifespan(_app):
     ]
     for thread in runtime_threads:
         thread.start()
-    notification_scheduler = ShiftNotificationScheduler(snapshot_loader=get_processed_data)
+    notification_scheduler = ShiftNotificationScheduler(snapshot_loader=isolated_get_processed_data)
     try:
         notification_scheduler.start()
     except Exception as exc:
@@ -267,8 +278,6 @@ async def lifespan(_app):
         background_refresh.stop()
         for thread in runtime_threads:
             thread.join(timeout=5)
-        if _case_change_job is not None:
-            _case_change_job.slack.close()
         close_cached_connections()
         fcntl.flock(runtime_lock_handle.fileno(), fcntl.LOCK_UN)
         runtime_lock_handle.close()

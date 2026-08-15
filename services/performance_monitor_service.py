@@ -128,6 +128,11 @@ class PerformanceMonitorService:
         return record
 
     def _write_record(self, now: datetime, record: dict) -> None:
+        from services.isolated_snowflake_operations import write_performance_record
+
+        write_performance_record(self.table_name, now, record)
+
+    def _write_record_direct(self, now: datetime, record: dict) -> None:
         from services.snowflake_service import SnowflakeService
 
         database, schema, _table = self.table_name.split(".")
