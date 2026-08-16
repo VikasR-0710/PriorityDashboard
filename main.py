@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import fcntl
+import gc
 import math
 import os
 import subprocess
@@ -17,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+import psutil
 import pytz
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse
@@ -43,10 +46,13 @@ from services.isolated_notification_operations import run_case_change_notificati
 
 setup_snowflake_logging()
 BASE_DIR = Path(__file__).resolve().parent
-BACKGROUND_REFRESH_SECONDS = 60
-BACKGROUND_REFRESH_LABEL = "1 minute"
+BACKGROUND_REFRESH_SECONDS = 5 * 60
+BACKGROUND_REFRESH_LABEL = "5 minutes"
 SESSION_TTL_SECONDS = int(os.getenv("GCS_SESSION_TTL_SECONDS", "7200"))
 SESSION_CLEANUP_SECONDS = int(os.getenv("GCS_SESSION_CLEANUP_SECONDS", "900"))
+MEMORY_MAINTENANCE_SECONDS = max(
+    60, int(os.getenv("GCS_MEMORY_MAINTENANCE_SECONDS", "18000"))
+)
 MAX_SESSIONS = max(1, int(os.getenv("GCS_MAX_SESSIONS", "100")))
 INITIAL_DELAY_MINUTES = 0.5
 INTERVAL_MINUTES = 60
@@ -224,6 +230,37 @@ def sentiment_loop(stop_event):
             return
 
 
+def release_unused_memory():
+    """Collect unreachable objects and return eligible glibc heap pages to Linux."""
+    process = psutil.Process()
+    before_mb = process.memory_info().rss / 1048576
+    collected = gc.collect()
+    trimmed = False
+    if sys.platform.startswith("linux"):
+        try:
+            libc = ctypes.CDLL("libc.so.6")
+            libc.malloc_trim.argtypes = [ctypes.c_size_t]
+            libc.malloc_trim.restype = ctypes.c_int
+            trimmed = bool(libc.malloc_trim(0))
+        except (AttributeError, OSError) as exc:
+            print(f"Memory maintenance could not call malloc_trim: {exc}")
+    after_mb = process.memory_info().rss / 1048576
+    print(
+        "Memory maintenance completed: "
+        f"collected={collected}, malloc_trim={trimmed}, "
+        f"rss_before={before_mb:.2f} MB, rss_after={after_mb:.2f} MB, "
+        f"released={max(0.0, before_mb - after_mb):.2f} MB"
+    )
+
+
+def memory_maintenance_loop(stop_event):
+    while not stop_event.wait(MEMORY_MAINTENANCE_SECONDS):
+        try:
+            release_unused_memory()
+        except Exception as exc:
+            print(f"Memory maintenance failed: {exc}")
+
+
 def sla_impact_loop(stop_event):
     ist = pytz.timezone("Asia/Kolkata")
     while not stop_event.is_set():
@@ -261,6 +298,12 @@ async def lifespan(_app):
         threading.Thread(target=sentiment_loop, args=(stop_event,), daemon=True, name="sentiment-pipeline"),
         threading.Thread(target=sla_impact_loop, args=(stop_event,), daemon=True, name="sla-impact-pipeline"),
         threading.Thread(target=session_cleanup_loop, args=(stop_event,), daemon=True, name="session-cleanup"),
+        threading.Thread(
+            target=memory_maintenance_loop,
+            args=(stop_event,),
+            daemon=True,
+            name="memory-maintenance",
+        ),
     ]
     for thread in runtime_threads:
         thread.start()
