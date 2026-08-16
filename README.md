@@ -458,8 +458,9 @@ The Due Date gate is applied in:
 By default, sentiment is imported from the latest record per case in
 `SENTIMENT_ANALYSIS_RESULTS_72H`; no sentiment-related OpenAI request is made.
 Only recognized source values are mapped and upserted into `DBD_SENTIMENT_DATA`.
-Missing or unknown source values are skipped, preserving any existing dashboard
-sentiment until a valid 72-hour result becomes available.
+When a case has no 72-hour result, an existing dashboard sentiment is preserved;
+if the target table also has no value, the case is initialized as `Neutral`.
+Unknown source values are skipped.
 
 The legacy OpenAI fallback remains available for future use, but is cost-safe and
 disabled by default. It can be deliberately enabled with:

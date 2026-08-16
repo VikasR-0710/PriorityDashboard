@@ -111,6 +111,31 @@ def fetch_latest_reference_sentiments(case_numbers):
         conn.close()
 
 
+def fetch_existing_target_sentiments(case_numbers):
+    case_numbers = sorted({str(number).strip() for number in case_numbers if str(number).strip()})
+    if not case_numbers:
+        return {}
+
+    conn = get_pipeline_snowflake_connection()
+    cursor = conn.cursor()
+    try:
+        placeholders = ", ".join(["%s"] * len(case_numbers))
+        cursor.execute(
+            f"""SELECT CaseNumber, Sentiment
+            FROM {TARGET_TABLE}
+            WHERE CaseNumber IN ({placeholders})""",
+            tuple(case_numbers),
+        )
+        return {
+            str(case_number): sentiment
+            for case_number, sentiment in cursor.fetchall()
+            if str(sentiment or "").strip()
+        }
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def compare_with_reference_sentiments(data):
     """Use the latest mapped 72H sentiment when it differs from OpenAI."""
     if not data:
@@ -163,8 +188,12 @@ def prepare_reference_sentiments(cases):
     """Build dashboard sentiments only from the latest mapped 72H results."""
     case_numbers = [str(case.get("CaseNumber") or "").strip() for case in cases]
     reference = fetch_latest_reference_sentiments(case_numbers)
+    missing_case_numbers = [number for number in case_numbers if number and number not in reference]
+    existing_target = fetch_existing_target_sentiments(missing_case_numbers)
     processed = []
     missing = 0
+    neutral_fallbacks = 0
+    preserved_existing = 0
     unmapped = 0
 
     for case_number in case_numbers:
@@ -173,6 +202,11 @@ def prepare_reference_sentiments(cases):
         raw_sentiment = reference.get(case_number)
         if raw_sentiment is None:
             missing += 1
+            if case_number in existing_target:
+                preserved_existing += 1
+            else:
+                neutral_fallbacks += 1
+                processed.append({"CaseNumber": case_number, "Sentiment": "Neutral"})
             continue
         sentiment = map_reference_sentiment(raw_sentiment)
         if sentiment is None:
@@ -183,7 +217,9 @@ def prepare_reference_sentiments(cases):
 
     print(
         "🔎 72H sentiment import: "
-        f"mapped={len(processed)}, missing={missing}, unmapped={unmapped}"
+        f"mapped={len(processed) - neutral_fallbacks}, missing={missing}, "
+        f"neutral_fallbacks={neutral_fallbacks}, "
+        f"preserved_existing={preserved_existing}, unmapped={unmapped}"
     )
     return processed
 
