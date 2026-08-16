@@ -453,7 +453,20 @@ The Due Date gate is applied in:
 - `pages/CasePriorityIndex.py`
 - `pages/OngoingSLABreaches.py`
 
-## AI Sentiment Pipeline
+## Sentiment Pipeline
+
+By default, sentiment is imported from the latest record per case in
+`SENTIMENT_ANALYSIS_RESULTS_72H`; no sentiment-related OpenAI request is made.
+Only recognized source values are mapped and upserted into `DBD_SENTIMENT_DATA`.
+Missing or unknown source values are skipped, preserving any existing dashboard
+sentiment until a valid 72-hour result becomes available.
+
+The legacy OpenAI fallback remains available for future use, but is cost-safe and
+disabled by default. It can be deliberately enabled with:
+
+```bash
+OPENAI_SENTIMENT_ENABLED=true
+```
 
 Sentiment logic is implemented in:
 

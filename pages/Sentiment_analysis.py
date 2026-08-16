@@ -29,6 +29,10 @@ OPENAI_MODEL = "gpt-4o-mini"
 PRICING_TIER = "standard"
 PRICE_SOURCE = "https://developers.openai.com/api/docs/pricing?latest-pricing=standard"
 OPENAI_DELAY = 0.5
+# Cost-safe default: OpenAI sentiment calls must be explicitly enabled.
+OPENAI_SENTIMENT_ENABLED = os.getenv("OPENAI_SENTIMENT_ENABLED", "false").strip().lower() in {
+    "1", "true", "yes", "on",
+}
 VALID_SENTIMENTS = {"Positive", "Neutral", "Negative", "Critical"}
 
 REFERENCE_SENTIMENT_MAP = {
@@ -153,6 +157,35 @@ def compare_with_reference_sentiments(data):
         f"missing={missing}, unmapped={unmapped}"
     )
     return data
+
+
+def prepare_reference_sentiments(cases):
+    """Build dashboard sentiments only from the latest mapped 72H results."""
+    case_numbers = [str(case.get("CaseNumber") or "").strip() for case in cases]
+    reference = fetch_latest_reference_sentiments(case_numbers)
+    processed = []
+    missing = 0
+    unmapped = 0
+
+    for case_number in case_numbers:
+        if not case_number:
+            continue
+        raw_sentiment = reference.get(case_number)
+        if raw_sentiment is None:
+            missing += 1
+            continue
+        sentiment = map_reference_sentiment(raw_sentiment)
+        if sentiment is None:
+            unmapped += 1
+            print(f"⚠️ Unmapped 72H sentiment for case {case_number}: {raw_sentiment!r}")
+            continue
+        processed.append({"CaseNumber": case_number, "Sentiment": sentiment})
+
+    print(
+        "🔎 72H sentiment import: "
+        f"mapped={len(processed)}, missing={missing}, unmapped={unmapped}"
+    )
+    return processed
 
 
 def upsert_to_snowflake(data):
@@ -620,12 +653,20 @@ def main():
         print("ℹ️ No cases to process. Exiting.")
         return
     
-    openai_svc = OpenAIService()
-    openai_client = openai_svc.get_connection()
-    try:
-        prepare_and_upsert(cases, openai_client)
-    finally:
-        openai_client.close()
+    if not OPENAI_SENTIMENT_ENABLED:
+        print(
+            "🔒 OpenAI sentiment is disabled. "
+            f"Importing latest sentiments from {REFERENCE_SENTIMENT_TABLE}."
+        )
+        upsert_to_snowflake(prepare_reference_sentiments(cases))
+    else:
+        print("⚠️ OpenAI sentiment is explicitly enabled by OPENAI_SENTIMENT_ENABLED.")
+        openai_svc = OpenAIService()
+        openai_client = openai_svc.get_connection()
+        try:
+            prepare_and_upsert(cases, openai_client)
+        finally:
+            openai_client.close()
     print("🎉 Pipeline completed successfully.")
 
 if __name__ == "__main__":
