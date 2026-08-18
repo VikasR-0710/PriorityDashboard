@@ -46,8 +46,8 @@ from services.isolated_notification_operations import run_case_change_notificati
 
 setup_snowflake_logging()
 BASE_DIR = Path(__file__).resolve().parent
-BACKGROUND_REFRESH_SECONDS = 5 * 60
-BACKGROUND_REFRESH_LABEL = "5 minutes"
+BACKGROUND_REFRESH_SECONDS = 1 * 60
+BACKGROUND_REFRESH_LABEL = "1 minute"
 SESSION_TTL_SECONDS = int(os.getenv("GCS_SESSION_TTL_SECONDS", "7200"))
 SESSION_CLEANUP_SECONDS = int(os.getenv("GCS_SESSION_CLEANUP_SECONDS", "900"))
 MEMORY_MAINTENANCE_SECONDS = max(
