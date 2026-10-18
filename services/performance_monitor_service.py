@@ -154,7 +154,11 @@ class PerformanceMonitorService:
             record["Process uptime hours"],
         )
         with self._write_lock:
-            conn = SnowflakeService().connect(database=database, schema=schema)
+            conn = SnowflakeService().connect(
+                warehouse="CS_BOT_WH",
+                database=database,
+                schema=schema,
+            )
             cursor = conn.cursor()
             try:
                 cursor.execute(

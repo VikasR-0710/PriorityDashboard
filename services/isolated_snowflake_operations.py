@@ -73,7 +73,11 @@ def _write_application_log_batch(table_name: str, rows: list[tuple]) -> None:
     from services.snowflake_service import SnowflakeService
 
     database, schema, _ = table_name.split(".")
-    conn = SnowflakeService().connect(database=database, schema=schema)
+    conn = SnowflakeService().connect(
+        warehouse="CS_BOT_WH",
+        database=database,
+        schema=schema,
+    )
     cursor = conn.cursor()
     try:
         cursor.executemany(

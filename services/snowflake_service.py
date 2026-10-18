@@ -5,6 +5,9 @@ from config.delinea_loader import fetch_snowflake_credentials
 
 load_dotenv()
 
+DEFAULT_WAREHOUSE = "CS_BOT_WH"
+
+
 class SnowflakeService:
     def connect(self, warehouse=None, database=None, schema=None):
         # 1. Try Delinea first
@@ -25,7 +28,7 @@ class SnowflakeService:
 
         conn_kwargs = {"user": user, "password": password, "account": account}
         conn_kwargs["role"] = "JIRA_ENG_ANALYST"
-        if warehouse: conn_kwargs["warehouse"] = warehouse
+        conn_kwargs["warehouse"] = warehouse or DEFAULT_WAREHOUSE
         if database: conn_kwargs["database"] = database
         if schema: conn_kwargs["schema"] = schema
 

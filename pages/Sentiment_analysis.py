@@ -74,7 +74,7 @@ MODEL_PRICING_PER_1M = {
 def get_pipeline_snowflake_connection():
     sf_service = SnowflakeService()
     return sf_service.connect(
-        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "CS_BOT_WH"),
+        warehouse="CS_BOT_WH",
         database=os.getenv("SNOWFLAKE_DATABASE", "CUSTOMER_SUPPORT_BOT_LOGS"),
         schema=os.getenv("SNOWFLAKE_SCHEMA", "CHAT_DATA")
     )
