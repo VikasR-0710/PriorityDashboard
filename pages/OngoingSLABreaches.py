@@ -22,7 +22,7 @@ def get_all_breach_records():
     due_date_select = f", {due_date_field}" if due_date_field else ""
     
     # UPDATED: Added Heal_Desk__c to the query
-    query = f"""SELECT Id, CaseNumber, Subject, Status, Owner.Name, Account.Name, Support_Level__c, Severity__c, CreatedDate, Heal_Desk__c{due_date_select},
+    query = f"""SELECT Id, CaseNumber, Subject, Status, Owner.Name, Account.Name, Support_Level__c, Severity__c, CreatedDate, Heal_Desk__c, IsEscalated{due_date_select},
                (SELECT CommentBody, CreatedBy.Name, CreatedDate, IsPublished FROM CaseComments WHERE IsPublished=true ORDER BY CreatedDate DESC)
         FROM Case WHERE Owner.Name IN ({owner_names_str})
           AND Status IN ('New', 'Open', 'Assigned') AND Severity__c != null"""
@@ -111,7 +111,8 @@ def get_all_breach_records():
                     'SLA Status': f"🚨 Overdue: {sla_text.split(': ')[1] if ': ' in sla_text else sla_text}",
                     'Breach_Month': breach_month,
                     'Salesforce Status': status,
-                    'Is_Heal_Desk': bool(row.get('Heal_Desk__c')) # Added Heal Desk flag
+                    'Is_Heal_Desk': bool(row.get('Heal_Desk__c')), # Added Heal Desk flag
+                    'Escalated': bool(row.get('IsEscalated'))
                 })
         except Exception as e:
             print(f"⚠️ Chart SLA Calc Error: {e}")
@@ -388,7 +389,7 @@ def sync_sla_breach_impact_history(current_priority_df=None):
     return total_rows
 
 
-def get_filtered_breach_data(active_owners, search_query="", is_heal_desk_filter=False):
+def get_filtered_breach_data(active_owners, search_query="", is_heal_desk_filter=False, escalated_only=False):
     """Return chart groups and details using the original breach filters."""
     all_breaches_df = get_all_breach_records()
     if all_breaches_df.empty:
@@ -399,6 +400,8 @@ def get_filtered_breach_data(active_owners, search_query="", is_heal_desk_filter
         filtered_df = all_breaches_df.copy()
     if is_heal_desk_filter:
         filtered_df = filtered_df[filtered_df['Is_Heal_Desk'] == True].copy()
+    if escalated_only:
+        filtered_df = filtered_df[filtered_df['Escalated'] == True].copy()
     if search_query:
         search_terms = [term.strip() for term in search_query.split(",") if term.strip()]
         if search_terms:

@@ -5,3 +5,22 @@
 .breach-header { padding: 10px 18px; color: #8196a7; text-transform: uppercase; font-size: 9px; border-top: 1px solid var(--line); }
 .breach-item { padding: 10px; border-top: 1px solid var(--line); font-size: 10px; color: #abbac5; }
 .breach-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toggle-group {
+  grid-column: 5;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  white-space: nowrap;
+}
+
+.toggle-group .toggle {
+  grid-column: auto;
+}
+
+@media (max-width: 900px) {
+  .toggle-group {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}

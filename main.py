@@ -48,6 +48,7 @@ setup_snowflake_logging()
 BASE_DIR = Path(__file__).resolve().parent
 BACKGROUND_REFRESH_SECONDS = 1 * 60
 BACKGROUND_REFRESH_LABEL = "1 minute"
+ESCALATED_SNAPSHOT_TTL_SECONDS = 60
 SESSION_TTL_SECONDS = int(os.getenv("GCS_SESSION_TTL_SECONDS", "7200"))
 SESSION_CLEANUP_SECONDS = int(os.getenv("GCS_SESSION_CLEANUP_SECONDS", "900"))
 MEMORY_MAINTENANCE_SECONDS = max(
@@ -67,6 +68,27 @@ visible_state = {
                  "text": "Preparing to load...", "error": None},
 }
 runtime_lock_handle = None
+escalated_snapshot_lock = threading.Lock()
+escalated_snapshot = {"dataframe": None, "loaded_at": 0.0}
+
+
+def get_escalated_snapshot_dataframe(now=None):
+    """Return a short-lived snapshot used only by the Escalated Only toggle."""
+    current_time = time.time() if now is None else now
+    with escalated_snapshot_lock:
+        dataframe = escalated_snapshot["dataframe"]
+        if (
+            dataframe is not None
+            and current_time - escalated_snapshot["loaded_at"] < ESCALATED_SNAPSHOT_TTL_SECONDS
+        ):
+            return dataframe
+
+        dataframe, _cases = isolated_get_processed_data(
+            refresh_token=f"escalated-{time.time_ns()}",
+            escalated_only=True,
+        )
+        escalated_snapshot.update(dataframe=dataframe, loaded_at=time.time())
+        return dataframe
 
 
 def new_session_state():
@@ -375,7 +397,8 @@ def dashboard(
     request: Request,
     region: list[str] = Query(default=[]), owner: list[str] = Query(default=[]),
     support: list[str] = Query(default=[]), priority: list[str] = Query(default=[]),
-    search: str = "", heal_desk_only: bool = False, sort: Optional[str] = None,
+    search: str = "", heal_desk_only: bool = False, escalated_only: bool = False,
+    sort: Optional[str] = None,
     ascending: bool = True,
 ):
     client_id = request.state.gcs_client_id
@@ -387,10 +410,15 @@ def dashboard(
     # The published snapshot is immutable. Filtering creates a new frame only
     # when ranking adds request-specific columns, avoiding a full copy here.
     df = snapshot["dataframe"]
+    if escalated_only:
+        expanded_escalated = get_escalated_snapshot_dataframe()
+        df = pd.concat([df, expanded_escalated], ignore_index=True)
+        if "Case Number" in df.columns:
+            df = df.drop_duplicates(subset=["Case Number"], keep="last")
     filtered, active_owners, search_query, heal_filter = apply_filters_and_ranking(
         df, region or [ALL_REGIONS_OPTION], owner,
         support or [ALL_SUPPORT_LEVELS_OPTION], priority or [ALL_PRIORITY_OPTION],
-        search, heal_desk_only,
+        search, heal_desk_only, escalated_only,
     )
     if sort and sort in filtered.columns:
         target = "SLA_Minutes" if sort == "SLA Response Time" else sort
@@ -400,7 +428,7 @@ def dashboard(
     active_regions = regions if not region or ALL_REGIONS_OPTION in region else region
     available_owners = sorted(name for name, value in owner_map.items() if value in active_regions)
     support_levels = sorted(str(v).strip() for v in df.get("Support Level", pd.Series(dtype=str)).dropna().unique() if str(v).strip())
-    breaches = get_filtered_breach_data(active_owners, search_query, heal_filter)
+    breaches = get_filtered_breach_data(active_owners, search_query, heal_filter, escalated_only)
     background = background_refresh.get_completed_snapshot()
     return {
         "rows": dataframe_records(filtered),

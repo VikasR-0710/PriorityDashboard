@@ -326,18 +326,23 @@ def get_project_support(project_id):
     sup_res = sf.query(f"SELECT Support_Level__c FROM Case WHERE Account.Name LIKE '%{proj_name}%' AND Support_Level__c != NULL LIMIT 1")
     return sup_res["records"][0].get("Support_Level__c") if sup_res["records"] else None
 
-def fetch_cases(refresh_token=None):
+def fetch_cases(refresh_token=None, escalated_only=False):
     # Deliberately uncached: snapshots own their data and old fetches must be releasable.
     sf = get_sf_connection()
     owner_names_str = build_owner_name_filter(get_owner_region_map().keys())
     due_date_field = get_case_due_date_field()
     due_date_select = f", {due_date_field}" if due_date_field else ""
+    status_filter = (
+        "IsEscalated = true AND Status != 'Closed'"
+        if escalated_only
+        else "Status IN ('New', 'Open', 'Assigned')"
+    )
     query = f"""
         SELECT Id, CaseNumber, Subject, Status, Owner.Name, Account.Name, AccountName__c, RecordTypeId, RecordType.Name, RecordType.DeveloperName,
             Support_Level__c, Severity__c, Sevone__c, IsEscalated, CreatedDate, ClosedDate, Heal_Desk__c{due_date_select},
             (select CommentBody, CreatedBy.Name, CreatedDate, IsPublished from CaseComments order by CreatedDate Desc)
         FROM Case
-        WHERE Status IN ('New', 'Open', 'Assigned') and Owner.Name IN ({owner_names_str})"""
+        WHERE {status_filter} and Owner.Name IN ({owner_names_str})"""
     return sf.query_all(query)["records"]
 
 def convert_to_ist(date_string):
@@ -428,15 +433,18 @@ def is_generalized_comment(comment_body):
         "checking the issue", "update shortly", "out of office"]
     return any(phrase in body_lower for phrase in generic_phrases)
 
-def get_processed_data(progress_callback=None, refresh_token=None):
-    return _get_processed_data_impl(progress_callback, refresh_token)
+def get_processed_data(progress_callback=None, refresh_token=None, escalated_only=False):
+    return _get_processed_data_impl(progress_callback, refresh_token, escalated_only)
 
 
-def _get_processed_data_impl(progress_callback=None, refresh_token=None):
+def _get_processed_data_impl(progress_callback=None, refresh_token=None, escalated_only=False):
     if progress_callback:
         progress_callback(5, "Initializing connections...")
         
-    cases = fetch_cases(refresh_token=refresh_token)
+    cases = fetch_cases(
+        refresh_token=refresh_token,
+        escalated_only=escalated_only,
+    )
     if progress_callback:
         progress_callback(20, f"Fetched {len(cases)} cases from Salesforce...")
         
@@ -631,7 +639,7 @@ def sync_audit_history(df: pd.DataFrame):
 
 def apply_filters_and_ranking(
     df, selected_regions=None, selected_owners=None, selected_support_levels=None,
-    selected_priorities=None, search_query="", heal_desk_only=False,
+    selected_priorities=None, search_query="", heal_desk_only=False, escalated_only=False,
 ):
     """Apply the original dashboard filtering and ranking rules without UI state."""
     owner_region_map = get_owner_region_map()
@@ -672,6 +680,9 @@ def apply_filters_and_ranking(
     # 🎯 Apply Heal Desk Filter
     if heal_desk_only:
         filtered = filtered[filtered["Is_Heal_Desk"] == True]
+
+    if escalated_only:
+        filtered = filtered[filtered["Escalated"] == True]
     
     # 🎯 Apply Prioritization ONLY if no specific case search is active.
     if selected_priorities and not search_query:

@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/static/theme.css?v=20260724-6">
   <link rel="stylesheet" href="/static/table-readable.css?v=20260724-10">
   <link rel="stylesheet" href="/static/operations.css?v=20260727-1">
-  <script src="/static/app.js?v=20260724-8" defer></script>
+  <script src="/static/app.js?v=20261018-1" defer></script>
 </head>
 <body>
   <div class="aurora one"></div><div class="aurora two"></div>
@@ -22,7 +22,10 @@
       <div class="filter-field"><span>Support Level</span><details class="multi-filter" id="support"><summary>All support levels</summary><div class="multi-options"></div></details></div>
       <div class="filter-field"><span>Know Priority Cases</span><details class="multi-filter" id="priority"><summary>All priority</summary><div class="multi-options"></div></details></div>
       <label class="filter-field"><span>Case Search</span><div class="search"><span>⌕</span><input id="search" placeholder="Case #"></div></label>
-      <label class="toggle"><input id="heal" type="checkbox"><span></span>🏥 Heal Desk Only</label>
+      <div class="toggle-group">
+        <label class="toggle"><input id="heal" type="checkbox"><span></span>🏥 Heal Desk Only</label>
+        <label class="toggle"><input id="escalated" type="checkbox"><span></span>🚨 Escalated Only</label>
+      </div>
     </section>
     <section class="card table-card"><div class="card-title"><h2>📋 Case Priority Index</h2><span id="caseCount"></span></div><div class="table-wrap"><table><thead><tr id="headers"></tr></thead><tbody id="rows"></tbody></table></div></section>
     <section class="charts">

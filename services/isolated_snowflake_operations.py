@@ -48,12 +48,18 @@ def write_application_log_batch(table_name: str, rows: list[tuple]) -> None:
     _run("app_log", {"table_name": table_name, "rows": rows})
 
 
-def get_processed_data(refresh_token=None):
+def get_processed_data(refresh_token=None, escalated_only=False):
     """Run the recurring Salesforce/Snowflake read pipeline outside the parent."""
     completed = subprocess.run(
         [sys.executable, "-m", "services.isolated_snowflake_operations", "processed_data"],
         cwd=str(BASE_DIR),
-        input=pickle.dumps({"refresh_token": refresh_token}, protocol=pickle.HIGHEST_PROTOCOL),
+        input=pickle.dumps(
+            {
+                "refresh_token": refresh_token,
+                "escalated_only": escalated_only,
+            },
+            protocol=pickle.HIGHEST_PROTOCOL,
+        ),
         capture_output=True,
         check=True,
     )
@@ -104,7 +110,10 @@ def _run_child(operation: str, payload: dict) -> None:
         _write_application_log_batch(payload["table_name"], payload["rows"])
     elif operation == "processed_data":
         from pages.CasePriorityIndex import get_processed_data as operation_fn
-        return operation_fn(refresh_token=payload.get("refresh_token"))
+        return operation_fn(
+            refresh_token=payload.get("refresh_token"),
+            escalated_only=payload.get("escalated_only", False),
+        )
     else:
         raise ValueError(f"Unknown isolated Snowflake operation: {operation}")
 
