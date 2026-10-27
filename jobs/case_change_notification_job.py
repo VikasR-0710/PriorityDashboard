@@ -16,6 +16,9 @@ from services.notification_service import (
 
 logger = logging.getLogger(__name__)
 
+XACTLY_ACCOUNT_NAME = "xactly corp."
+MISSING_CUSTOMER_PROJECT_NOTIFICATION = "MISSING_CUSTOMER_PROJECT"
+
 
 def _owner_key(owner: str) -> str:
     return owner.strip().casefold()
@@ -52,6 +55,7 @@ class CaseChangeNotificationJob:
         current_dataframe: pd.DataFrame,
     ) -> dict[str, int]:
         stats = {
+            "missing_customer_project": 0,
             "new_assignment": 0,
             "follow_up_response": 0,
             "priority_changed": 0,
@@ -65,15 +69,20 @@ class CaseChangeNotificationJob:
             not self.settings.enabled
             or self.settings.test_only
             or current_dataframe.empty
-            or previous_dataframe is None
-            or previous_dataframe.empty
         ):
             return stats
 
-        previous_ranked = _ensure_owner_priority(previous_dataframe.copy())
         current_ranked = _ensure_owner_priority(current_dataframe.copy())
-        previous = self._state_by_case(previous_ranked)
         current = self._state_by_case(current_ranked)
+        self._send_missing_customer_project_alerts(current, stats)
+
+        # Missing-project validation applies to the first snapshot too. Change
+        # detection still needs a prior non-empty snapshot.
+        if previous_dataframe is None or previous_dataframe.empty:
+            return stats
+
+        previous_ranked = _ensure_owner_priority(previous_dataframe.copy())
+        previous = self._state_by_case(previous_ranked)
         new_assignments: dict[str, list[CaseState]] = {}
         priority_changes: dict[str, list[CaseState]] = {}
 
@@ -167,6 +176,67 @@ class CaseChangeNotificationJob:
                 stats=stats,
             )
         return stats
+
+    def _send_missing_customer_project_alerts(
+        self,
+        current: dict[str, CaseState],
+        stats: dict[str, int],
+    ) -> None:
+        candidates = [
+            state for state in current.values()
+            if str(state.case.get("Customer Name") or "").strip().casefold() == XACTLY_ACCOUNT_NAME
+            and not str(state.case.get("Customer Project Id") or "").strip()
+            and _owner_in_scope(
+                state.owner,
+                self.settings,
+                region=str(state.case.get("Region") or ""),
+            )
+        ]
+        if not candidates:
+            return
+        delivered = self.audit.delivered_notifications(
+            state.case_number for state in candidates
+        )
+        for state in candidates:
+            if (state.case_number, MISSING_CUSTOMER_PROJECT_NOTIFICATION) in delivered:
+                stats["skipped"] += 1
+                continue
+            stats["missing_customer_project"] += 1
+            analyst = self.analysts.find_active(state.owner)
+            if not analyst:
+                stats["skipped"] += 1
+                continue
+            result = self.slack.send_missing_customer_project_alert(
+                state.case, analyst.name, analyst.email,
+            )
+            if result.sent:
+                stats["sent"] += 1
+                event = {
+                    "use_case": "DATA_QUALITY",
+                    "notification_type": MISSING_CUSTOMER_PROJECT_NOTIFICATION,
+                    "case_number": state.case_number,
+                    "region": state.case.get("Region"),
+                    "customer_name": state.case.get("Customer Name"),
+                    "current_owner": state.owner,
+                    "current_priority": state.priority,
+                    "current_status": state.status,
+                    "current_escalated": state.escalated,
+                }
+                try:
+                    stats["audit_records"] += self.audit.record_delivery(
+                        [event], analyst.name, analyst.email,
+                        result.slack_user_id, result.slack_message_ts,
+                    )
+                except Exception:
+                    stats["audit_errors"] += 1
+                    logger.exception(
+                        "Missing customer-project alert delivered, but audit failed for case %s",
+                        state.case_number,
+                    )
+            elif result.skipped:
+                stats["skipped"] += 1
+            else:
+                stats["errors"] += 1
 
     def _send(
         self,

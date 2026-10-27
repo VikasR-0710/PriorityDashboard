@@ -42,7 +42,10 @@ from services.isolated_snowflake_operations import (
     sync_priority_snapshot as isolated_sync_priority_snapshot,
     get_processed_data as isolated_get_processed_data,
 )
-from services.isolated_notification_operations import run_case_change_notifications
+from services.isolated_notification_operations import (
+    run_ageing_notifications,
+    run_case_change_notifications,
+)
 
 setup_snowflake_logging()
 BASE_DIR = Path(__file__).resolve().parent
@@ -53,6 +56,9 @@ SESSION_TTL_SECONDS = int(os.getenv("GCS_SESSION_TTL_SECONDS", "7200"))
 SESSION_CLEANUP_SECONDS = int(os.getenv("GCS_SESSION_CLEANUP_SECONDS", "900"))
 MEMORY_MAINTENANCE_SECONDS = max(
     60, int(os.getenv("GCS_MEMORY_MAINTENANCE_SECONDS", "18000"))
+)
+AGEING_NOTIFICATION_SECONDS = max(
+    300, int(os.getenv("GCS_AGEING_NOTIFICATION_SECONDS", "600"))
 )
 MAX_SESSIONS = max(1, int(os.getenv("GCS_MAX_SESSIONS", "100")))
 INITIAL_DELAY_MINUTES = 0.5
@@ -252,6 +258,19 @@ def sentiment_loop(stop_event):
             return
 
 
+def ageing_notification_loop(stop_event):
+    """Run daily-ageing rules independently from the dashboard refresh path."""
+    while not stop_event.is_set():
+        try:
+            owner_regions = fetch_owner_config()
+            stats = run_ageing_notifications(owner_regions)
+            print(f"ℹ️ Case ageing notification stats: {stats}")
+        except Exception as exc:
+            print(f"⚠️ Case ageing notifications failed: {exc}")
+        if stop_event.wait(AGEING_NOTIFICATION_SECONDS):
+            return
+
+
 def release_unused_memory():
     """Collect unreachable objects and return eligible glibc heap pages to Linux."""
     process = psutil.Process()
@@ -318,6 +337,7 @@ async def lifespan(_app):
     stop_event = threading.Event()
     runtime_threads = [
         threading.Thread(target=sentiment_loop, args=(stop_event,), daemon=True, name="sentiment-pipeline"),
+        threading.Thread(target=ageing_notification_loop, args=(stop_event,), daemon=True, name="case-ageing-notifications"),
         threading.Thread(target=sla_impact_loop, args=(stop_event,), daemon=True, name="sla-impact-pipeline"),
         threading.Thread(target=session_cleanup_loop, args=(stop_event,), daemon=True, name="session-cleanup"),
         threading.Thread(

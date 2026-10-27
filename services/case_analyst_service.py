@@ -64,3 +64,40 @@ class CaseAnalystService:
         finally:
             cursor.close()
             conn.close()
+
+    def find_active_many(self, analyst_names) -> dict[str, CaseAnalyst]:
+        """Resolve multiple Salesforce owners with one Snowflake query."""
+        requested = {str(name).strip() for name in analyst_names if str(name).strip()}
+        if not requested:
+            return {}
+        lookup_to_owners: dict[str, list[str]] = {}
+        for owner in requested:
+            lookup = ANALYST_NAME_ALIASES.get(owner.casefold(), owner).strip().casefold()
+            lookup_to_owners.setdefault(lookup, []).append(owner)
+        placeholders = ", ".join(["%s"] * len(lookup_to_owners))
+        conn = self.snowflake.connect(
+            warehouse="CS_BOT_WH",
+            database="CUSTOMER_SUPPORT_BOT_LOGS",
+            schema="CHAT_DATA",
+        )
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f"""SELECT ANALYST_NAME, EMAIL
+                FROM {self.table}
+                WHERE IS_ACTIVE = TRUE AND EMAIL IS NOT NULL
+                  AND LOWER(TRIM(ANALYST_NAME)) IN ({placeholders})
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY LOWER(TRIM(ANALYST_NAME))
+                    ORDER BY LAST_UPDATED DESC NULLS LAST
+                ) = 1""",
+                tuple(lookup_to_owners),
+            )
+            result: dict[str, CaseAnalyst] = {}
+            for analyst_name, email in cursor.fetchall():
+                for owner in lookup_to_owners.get(str(analyst_name).strip().casefold(), []):
+                    result[owner.casefold()] = CaseAnalyst(owner, str(email))
+            return result
+        finally:
+            cursor.close()
+            conn.close()

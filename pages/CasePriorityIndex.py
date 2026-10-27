@@ -528,6 +528,16 @@ def _get_processed_data_impl(progress_callback=None, refresh_token=None, escalat
         else:
             sla_text, sla_mins = "N/A", float('inf')
             breach_shift = "N/A"
+
+        # Pending Customer cases do not have an actionable response deadline in
+        # the Escalated Only view. Keep them sortable at the end of SLA ties and
+        # show a neutral dash instead of a stale Due/Overdue value.
+        if (
+            escalated_only
+            and str(case.get("Status") or "").strip().casefold()
+            == "pending_customer"
+        ):
+            sla_text, sla_mins, breach_shift = "-", float("inf"), "N/A"
             
         lcc_display = last_customer_comment_dt.strftime("%d-%b %H:%M") if last_customer_comment_dt else "N/A"
         if lcc_display == "N/A" and case.get("CreatedDate"):
@@ -545,6 +555,9 @@ def _get_processed_data_impl(progress_callback=None, refresh_token=None, escalat
             "Region": owner_region_map.get(owner_name, "UNKNOWN"), "Case Id": case.get("Id"),
             "Case Number": case.get("CaseNumber", "N/A"), "Subject": case.get("Subject", "No subject"),
             "Customer Name": customer_name, "Case Owner": owner_name, "Support Level": support_level,
+            # Retain the lookup value for validation/notification rules.  It is
+            # intentionally not rendered as a dashboard table column.
+            "Customer Project Id": project_id,
             "Severity": severity, "Status": case.get("Status", "N/A"), "Escalated": escalated,
             "Last Comment By": last_commenter, "Sentiment": sentiment, "Case Score": case_score,
             "Latest Comment Is Internal": latest_comment_is_internal,

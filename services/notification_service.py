@@ -419,6 +419,206 @@ class SlackNotificationService:
             logger.exception("Slack case change alert failed")
             return SlackDeliveryResult(False, error=str(exc))
 
+    def send_missing_customer_project_alert(
+        self,
+        case: Mapping[str, Any],
+        recipient_name: str,
+        recipient_email: str | None,
+    ) -> SlackDeliveryResult:
+        """Ask a case owner to populate Customer Project for an Xactly case."""
+        if not self.settings.enabled:
+            return SlackDeliveryResult(False, skipped=True, error="Slack notifications disabled")
+        if self.settings.dry_run:
+            logger.info(
+                "Dry run: would send missing customer-project alert for case %s to %s",
+                case.get("Case Number"), recipient_name,
+            )
+            return SlackDeliveryResult(False, skipped=True)
+        try:
+            client = self._get_client()
+            if not client:
+                return SlackDeliveryResult(False, error="Slack client not initialized")
+            user_id = self._find_user(recipient_email, recipient_name)
+            if not user_id:
+                return SlackDeliveryResult(False, error=f"Slack user not found: {recipient_name}")
+
+            case_number = str(case.get("Case Number") or "Unknown")
+            case_id = str(case.get("Case Id") or "")
+            case_label = case_number
+            if self.settings.salesforce_case_url and case_id:
+                case_url = self.settings.salesforce_case_url.format(
+                    case_id=case_id, case_number=case_number,
+                )
+                case_label = f"<{case_url}|{case_number}>"
+            account_label = (
+                "<https://xactly.lightning.force.com/lightning/r/Account/"
+                "0011U00000JT4yrQAD/view|Xactly Corp.>"
+            )
+            blocks = [
+                {
+                    "type": "header",
+                    "text": {"type": "plain_text", "text": "GCS Alert: Customer Project missing", "emoji": True},
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"Hi {recipient_name},\n\nCase *{case_label}* belongs to "
+                            f"{account_label}, but *Customer Project* is missing. "
+                            "Please update the Customer Project field in Salesforce."
+                        ),
+                    },
+                },
+            ]
+            channel = client.conversations_open(users=[user_id])["channel"]["id"]
+            response = client.chat_postMessage(
+                channel=channel,
+                text=f"Customer Project is missing for case {case_number}",
+                blocks=blocks,
+            )
+            if response.get("ok"):
+                return SlackDeliveryResult(
+                    True,
+                    slack_user_id=user_id,
+                    slack_message_ts=str(response.get("ts") or "") or None,
+                )
+            return SlackDeliveryResult(False, slack_user_id=user_id, error="Slack rejected message")
+        except Exception as exc:
+            logger.exception("Slack missing customer-project alert failed")
+            return SlackDeliveryResult(False, error=str(exc))
+
+    def send_pending_customer_alert(
+        self,
+        case: Mapping[str, Any],
+        recipient_name: str,
+        recipient_email: str | None,
+        pending_since: datetime,
+        elapsed_days: int,
+        manager_escalation: bool = False,
+    ) -> SlackDeliveryResult:
+        """Notify an owner, or escalate to their manager, at an exact ageing milestone."""
+        if not self.settings.enabled:
+            return SlackDeliveryResult(False, skipped=True, error="Slack notifications disabled")
+        if self.settings.dry_run:
+            logger.info(
+                "Dry run: would send pending-customer day-%s alert for case %s to %s",
+                elapsed_days, case.get("Case Number"), recipient_name,
+            )
+            return SlackDeliveryResult(False, skipped=True)
+        try:
+            client = self._get_client()
+            if not client:
+                return SlackDeliveryResult(False, error="Slack client not initialized")
+            user_id = self._find_user(recipient_email, recipient_name)
+            if not user_id:
+                return SlackDeliveryResult(False, error=f"Slack user not found: {recipient_name}")
+
+            case_number = str(case.get("Case Number", "Unknown"))
+            case_id = str(case.get("Case Id") or "")
+            case_label = case_number
+            if self.settings.salesforce_case_url and case_id:
+                case_url = self.settings.salesforce_case_url.format(
+                    case_id=case_id, case_number=case_number,
+                )
+                case_label = f"<{case_url}|{case_number}>"
+            pending_text = pending_since.strftime("%d-%b-%Y %I:%M %p %Z")
+            owner = str(case.get("Case Owner", "Unknown"))
+            if manager_escalation:
+                heading = "Pending Customer — Manager Escalation"
+                message = (
+                    f"Case *{case_label}*, owned by *{owner}*, has remained in "
+                    f"*Pending Customer* for {elapsed_days} days continuously."
+                )
+            else:
+                heading = "Pending Customer Reminder"
+                message = (
+                    f"Case *{case_label}* has remained in *Pending Customer* "
+                    f"for {elapsed_days} days continuously."
+                )
+            blocks = [
+                {"type": "header", "text": {"type": "plain_text", "text": heading, "emoji": True}},
+                {"type": "section", "text": {"type": "mrkdwn", "text": f"Hi {recipient_name},\n\n{message}"}},
+                {"type": "section", "fields": [
+                    {"type": "mrkdwn", "text": f"*Case:*\n{case_label}"},
+                    {"type": "mrkdwn", "text": f"*Owner:*\n{owner}"},
+                    {"type": "mrkdwn", "text": f"*Pending since:*\n{pending_text}"},
+                    {"type": "mrkdwn", "text": f"*Customer:*\n{case.get('Customer Name', 'N/A')}"},
+                ]},
+            ]
+            channel = client.conversations_open(users=[user_id])["channel"]["id"]
+            response = client.chat_postMessage(
+                channel=channel,
+                text=f"{heading}: {case_number}",
+                blocks=blocks,
+            )
+            if response.get("ok"):
+                return SlackDeliveryResult(
+                    True,
+                    slack_user_id=user_id,
+                    slack_message_ts=str(response.get("ts") or "") or None,
+                )
+            return SlackDeliveryResult(False, slack_user_id=user_id, error="Slack rejected message")
+        except Exception as exc:
+            logger.exception("Slack pending-customer alert failed")
+            return SlackDeliveryResult(False, error=str(exc))
+
+    def send_in_progress_alert(
+        self,
+        case: Mapping[str, Any],
+        recipient_name: str,
+        recipient_email: str | None,
+        elapsed_text: str,
+    ) -> SlackDeliveryResult:
+        """Tell an owner that an escalated case has remained In Progress."""
+        if not self.settings.enabled:
+            return SlackDeliveryResult(False, skipped=True, error="Slack notifications disabled")
+        if self.settings.dry_run:
+            logger.info(
+                "Dry run: would send In Progress alert for case %s to %s",
+                case.get("Case Number"), recipient_name,
+            )
+            return SlackDeliveryResult(False, skipped=True)
+        try:
+            client = self._get_client()
+            if not client:
+                return SlackDeliveryResult(False, error="Slack client not initialized")
+            user_id = self._find_user(recipient_email, recipient_name)
+            if not user_id:
+                return SlackDeliveryResult(False, error=f"Slack user not found: {recipient_name}")
+            case_number = str(case.get("Case Number", "Unknown"))
+            case_id = str(case.get("Case Id") or "")
+            case_label = case_number
+            if self.settings.salesforce_case_url and case_id:
+                case_url = self.settings.salesforce_case_url.format(
+                    case_id=case_id, case_number=case_number,
+                )
+                case_label = f"<{case_url}|{case_number}>"
+            message = (
+                f"Case *{case_label}* has been In Progress for the last "
+                f"*{elapsed_text}*. Please check your case internal comments."
+            )
+            blocks = [
+                {"type": "header", "text": {"type": "plain_text", "text": "In Progress Case Reminder", "emoji": True}},
+                {"type": "section", "text": {"type": "mrkdwn", "text": f"Hi {recipient_name},\n\n{message}"}},
+            ]
+            channel = client.conversations_open(users=[user_id])["channel"]["id"]
+            response = client.chat_postMessage(
+                channel=channel,
+                text=f"In Progress Case Reminder: {case_number}",
+                blocks=blocks,
+            )
+            if response.get("ok"):
+                return SlackDeliveryResult(
+                    True,
+                    slack_user_id=user_id,
+                    slack_message_ts=str(response.get("ts") or "") or None,
+                )
+            return SlackDeliveryResult(False, slack_user_id=user_id, error="Slack rejected message")
+        except Exception as exc:
+            logger.exception("Slack In Progress alert failed")
+            return SlackDeliveryResult(False, error=str(exc))
+
     @staticmethod
     def _numeric_priority(case: Mapping[str, Any]) -> float:
         value = case.get("Priority", case.get("Sequential_Rank"))
@@ -633,6 +833,52 @@ class CaseNotificationAuditService:
         except Exception:
             conn.rollback()
             raise
+        finally:
+            cursor.close()
+            conn.close()
+
+    def was_delivered(self, case_number: str, notification_type: str) -> bool:
+        """Return whether this case/milestone was already delivered."""
+        conn = self.snowflake.connect(
+            warehouse="CS_BOT_WH",
+            database="CUSTOMER_SUPPORT_BOT_LOGS",
+            schema="CHAT_DATA",
+        )
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f"""SELECT 1 FROM {self.table}
+                WHERE CASE_NUMBER = %s AND NOTIFICATION_TYPE = %s LIMIT 1""",
+                (case_number, notification_type),
+            )
+            return cursor.fetchone() is not None
+        finally:
+            cursor.close()
+            conn.close()
+
+    def delivered_notifications(self, case_numbers) -> set[tuple[str, str]]:
+        """Fetch all delivered milestones for a group of cases in one query."""
+        numbers = sorted({str(number).strip() for number in case_numbers if str(number).strip()})
+        if not numbers:
+            return set()
+        placeholders = ", ".join(["%s"] * len(numbers))
+        conn = self.snowflake.connect(
+            warehouse="CS_BOT_WH",
+            database="CUSTOMER_SUPPORT_BOT_LOGS",
+            schema="CHAT_DATA",
+        )
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f"""SELECT DISTINCT CASE_NUMBER, NOTIFICATION_TYPE
+                FROM {self.table}
+                WHERE CASE_NUMBER IN ({placeholders})""",
+                tuple(numbers),
+            )
+            return {
+                (str(case_number), str(notification_type))
+                for case_number, notification_type in cursor.fetchall()
+            }
         finally:
             cursor.close()
             conn.close()
